@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   fetchHomePageShowcase,
   HomeMediaItemRecord,
@@ -135,8 +135,8 @@ export function HomeBusinessShowcase() {
   );
 
   const streamBlocks = useMemo(() => {
-    if (!settings) return [] as Array<{ key: string; title: string; node: JSX.Element }>;
-    const blocks: Array<{ key: string; title: string; node: JSX.Element }> = [];
+    if (!settings) return [] as Array<{ key: string; title: string; node: ReactNode }>;
+    const blocks: Array<{ key: string; title: string; node: ReactNode }> = [];
     for (const moduleKey of settings.enabledModules) {
       if (moduleKey === "new_business_sidebar" && newBusinesses.length > 0) {
         blocks.push({
