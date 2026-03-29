@@ -189,7 +189,9 @@ export function RazorpayPaymentPanel({ intentId }: { intentId: string }) {
       <p className="mt-2 text-sm text-muted">
         Intent {intent.id} | Purpose {intent.purpose.replaceAll("_", " ")}
       </p>
-      <p className="mt-2 text-lg font-semibold">Amount INR {intent.amount}</p>
+      <p className="mt-2 text-lg font-semibold">
+        Amount {intent.currency} {intent.amount}
+      </p>
       <p className="mt-1 text-xs text-muted">Order {intent.providerOrderId || "pending"}</p>
 
       {info && (

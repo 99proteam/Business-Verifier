@@ -23,6 +23,8 @@ export function CheckoutPanel({
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<"wallet" | "gateway">("wallet");
+  const [gatewayProvider, setGatewayProvider] = useState<"razorpay" | "paypal">("razorpay");
+  const [currency, setCurrency] = useState<"INR" | "USD">("INR");
   const [selectedPlanKey, setSelectedPlanKey] = useState(initialPlanKey ?? product.pricingPlans?.[0]?.key ?? "standard");
 
   useEffect(() => {
@@ -32,6 +34,11 @@ export function CheckoutPanel({
   const selectedPlan = useMemo(
     () => resolveProductPricingPlan(product, selectedPlanKey),
     [product, selectedPlanKey],
+  );
+  const usdRate = 83;
+  const amountInUsd = useMemo(
+    () => Math.max(0.5, Math.round((selectedPlan.price / usdRate) * 100) / 100),
+    [selectedPlan.price],
   );
 
   const canRefund = !product.noRefund;
@@ -43,6 +50,7 @@ export function CheckoutPanel({
         Product: <b>{product.title}</b> by {product.ownerName}
       </p>
       <p className="mt-3 text-2xl font-semibold">INR {selectedPlan.price}</p>
+      <p className="mt-1 text-sm text-muted">USD {amountInUsd} approx</p>
 
       <div className="mt-4 rounded-2xl border border-border bg-surface p-4 text-sm">
         <p className="font-medium">Pricing plans</p>
@@ -108,6 +116,62 @@ export function CheckoutPanel({
             Gateway
           </button>
         </div>
+        {paymentMethod === "gateway" ? (
+          <div className="mt-3 space-y-3">
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setGatewayProvider("razorpay");
+                  setCurrency("INR");
+                }}
+                className={`rounded-lg px-3 py-1 text-xs transition ${
+                  gatewayProvider === "razorpay"
+                    ? "bg-brand text-white"
+                    : "border border-border hover:border-brand/40"
+                }`}
+              >
+                Razorpay
+              </button>
+              <button
+                type="button"
+                onClick={() => setGatewayProvider("paypal")}
+                className={`rounded-lg px-3 py-1 text-xs transition ${
+                  gatewayProvider === "paypal"
+                    ? "bg-brand text-white"
+                    : "border border-border hover:border-brand/40"
+                }`}
+              >
+                PayPal
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrency("INR")}
+                className={`rounded-lg px-3 py-1 text-xs transition ${
+                  currency === "INR"
+                    ? "bg-brand text-white"
+                    : "border border-border hover:border-brand/40"
+                }`}
+              >
+                INR
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrency("USD")}
+                disabled={gatewayProvider === "razorpay"}
+                className={`rounded-lg px-3 py-1 text-xs transition ${
+                  currency === "USD"
+                    ? "bg-brand text-white"
+                    : "border border-border hover:border-brand/40"
+                }`}
+              >
+                USD
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {product.noRefund && (
@@ -169,6 +233,8 @@ export function CheckoutPanel({
                   ownerEmail: user.email ?? "",
                   productSlug: product.uniqueLinkSlug,
                   pricingPlanKey: selectedPlan.key,
+                  provider: gatewayProvider,
+                  currency,
                 }),
               });
               const payload = (await response.json()) as Record<string, unknown>;

@@ -4,20 +4,28 @@ import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
+  adminSetBusinessRecommendation,
   AdTagPlanRecord,
   AdCampaignRecord,
   AdCampaignStatus,
+  BusinessApplicationRecord,
   adminReviewAdCampaign,
   buildAdPerformanceCsv,
   buildAdPerformanceReport,
   fetchAdPricingSettings,
   fetchAdminAdCampaigns,
+  fetchBusinessApplications,
+  fetchHomePageSettings,
+  HomeContentModuleType,
+  HomeMediaItemRecord,
   updateAdPricingSettings,
+  updateHomePageSettings,
 } from "@/lib/firebase/repositories";
 
 export function AdminAdsPanel() {
   const { user, hasFirebaseConfig } = useAuth();
   const [rows, setRows] = useState<AdCampaignRecord[]>([]);
+  const [approvedBusinesses, setApprovedBusinesses] = useState<BusinessApplicationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +39,17 @@ export function AdminAdsPanel() {
   const [customTagPlansText, setCustomTagPlansText] = useState("[]");
   const [cityTargetingSurchargePercent, setCityTargetingSurchargePercent] =
     useState("10");
+  const [homeBusinessMode, setHomeBusinessMode] = useState<"new" | "recommended" | "both">("both");
+  const [homeBusinessLimit, setHomeBusinessLimit] = useState("20");
+  const [homeNewWindowDays, setHomeNewWindowDays] = useState("30");
+  const [homeEnabledModules, setHomeEnabledModules] = useState<HomeContentModuleType[]>([
+    "new_business_sidebar",
+    "recommended_business",
+    "images_redirect",
+    "videos_url",
+  ]);
+  const [homeImageItemsText, setHomeImageItemsText] = useState("[]");
+  const [homeVideoItemsText, setHomeVideoItemsText] = useState("[]");
   const [reportSummary, setReportSummary] = useState<{
     campaigns: number;
     impressions: number;
@@ -46,12 +65,15 @@ export function AdminAdsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [campaigns, settings] = await Promise.all([
+      const [campaigns, settings, homepageSettings, approved] = await Promise.all([
         fetchAdminAdCampaigns(),
         fetchAdPricingSettings(),
+        fetchHomePageSettings(),
+        fetchBusinessApplications("approved"),
       ]);
       const report = await buildAdPerformanceReport();
       setRows(campaigns);
+      setApprovedBusinesses(approved);
       setReportSummary(report.summary);
       setHomeBannerCpm(String(settings.homeBannerCpm));
       setDirectoryBannerCpm(String(settings.directoryBannerCpm));
@@ -59,6 +81,12 @@ export function AdminAdsPanel() {
       setRecommendedTagYearly(String(settings.recommendedTagYearly));
       setCustomTagPlansText(JSON.stringify(settings.customTagPlans ?? [], null, 2));
       setCityTargetingSurchargePercent(String(settings.cityTargetingSurchargePercent));
+      setHomeBusinessMode(homepageSettings.businessMode);
+      setHomeBusinessLimit(String(homepageSettings.businessLimit));
+      setHomeNewWindowDays(String(homepageSettings.newBusinessWindowDays));
+      setHomeEnabledModules(homepageSettings.enabledModules);
+      setHomeImageItemsText(JSON.stringify(homepageSettings.imageItems ?? [], null, 2));
+      setHomeVideoItemsText(JSON.stringify(homepageSettings.videoItems ?? [], null, 2));
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -106,6 +134,96 @@ export function AdminAdsPanel() {
     } catch (saveError) {
       setError(
         saveError instanceof Error ? saveError.message : "Unable to save ad pricing.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function parseHomeMediaItems(source: string) {
+    const parsed = JSON.parse(source) as unknown;
+    if (!Array.isArray(parsed)) return [] as HomeMediaItemRecord[];
+    return parsed
+      .map((entry) => {
+        const row = entry as Record<string, unknown>;
+        return {
+          title: String(row.title ?? "").trim(),
+          mediaUrl: String(row.mediaUrl ?? "").trim(),
+          redirectUrl: String(row.redirectUrl ?? "").trim(),
+        } satisfies HomeMediaItemRecord;
+      })
+      .filter((row) => row.mediaUrl && row.redirectUrl);
+  }
+
+  function toggleHomeModule(module: HomeContentModuleType) {
+    setHomeEnabledModules((previous) => {
+      if (previous.includes(module)) {
+        const next = previous.filter((entry) => entry !== module);
+        return next.length ? next : [module];
+      }
+      return [...previous, module];
+    });
+  }
+
+  async function saveHomeSettings(event: FormEvent) {
+    event.preventDefault();
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      let imageItems: HomeMediaItemRecord[] = [];
+      let videoItems: HomeMediaItemRecord[] = [];
+      try {
+        imageItems = parseHomeMediaItems(homeImageItemsText);
+        videoItems = parseHomeMediaItems(homeVideoItemsText);
+      } catch {
+        setError(
+          "Home image/video items must be valid JSON array. Example: [{\"title\":\"Offer\",\"mediaUrl\":\"https://...\",\"redirectUrl\":\"https://...\"}]",
+        );
+        setBusy(false);
+        return;
+      }
+      await updateHomePageSettings({
+        adminUid: user.uid,
+        businessMode: homeBusinessMode,
+        businessLimit: Number(homeBusinessLimit),
+        newBusinessWindowDays: Number(homeNewWindowDays),
+        enabledModules: homeEnabledModules,
+        imageItems,
+        videoItems,
+      });
+      setInfo("Homepage settings updated.");
+      await load();
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Unable to update homepage settings.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleRecommendation(businessId: string, isRecommended: boolean) {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await adminSetBusinessRecommendation({
+        adminUid: user.uid,
+        businessId,
+        isRecommended,
+      });
+      setInfo(isRecommended ? "Business marked as recommended." : "Recommended tag removed.");
+      await load();
+    } catch (toggleError) {
+      setError(
+        toggleError instanceof Error
+          ? toggleError.message
+          : "Unable to update recommendation status.",
       );
     } finally {
       setBusy(false);
@@ -252,6 +370,122 @@ export function AdminAdsPanel() {
           Save ad pricing
         </button>
       </form>
+
+      <form onSubmit={saveHomeSettings} className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Homepage settings</h2>
+        <p className="mt-1 text-xs text-muted">
+          Control new/recommended listing mode, visible modules, and media stream.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label className="text-xs text-muted">
+            Business mode
+            <select
+              value={homeBusinessMode}
+              onChange={(event) =>
+                setHomeBusinessMode(event.target.value as "new" | "recommended" | "both")
+              }
+              className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+            >
+              <option value="new">New only</option>
+              <option value="recommended">Recommended only</option>
+              <option value="both">New + recommended</option>
+            </select>
+          </label>
+          <input
+            value={homeBusinessLimit}
+            onChange={(event) => setHomeBusinessLimit(event.target.value)}
+            type="number"
+            min={1}
+            max={20}
+            placeholder="Business limit (max 20)"
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          />
+          <input
+            value={homeNewWindowDays}
+            onChange={(event) => setHomeNewWindowDays(event.target.value)}
+            type="number"
+            min={1}
+            max={180}
+            placeholder="New business window in days"
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          />
+          <div className="rounded-xl border border-border bg-surface px-3 py-2 text-sm">
+            <p className="text-xs text-muted">Enabled stream modules</p>
+            <div className="mt-2 grid gap-1">
+              {(
+                [
+                  "new_business_sidebar",
+                  "recommended_business",
+                  "images_redirect",
+                  "videos_url",
+                ] as HomeContentModuleType[]
+              ).map((module) => (
+                <label key={module} className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={homeEnabledModules.includes(module)}
+                    onChange={() => toggleHomeModule(module)}
+                  />
+                  {module}
+                </label>
+              ))}
+            </div>
+          </div>
+          <textarea
+            value={homeImageItemsText}
+            onChange={(event) => setHomeImageItemsText(event.target.value)}
+            rows={5}
+            placeholder='[{"title":"Banner 1","mediaUrl":"https://...","redirectUrl":"https://..."}]'
+            className="rounded-xl border border-border bg-white px-3 py-2 text-sm outline-none md:col-span-2"
+          />
+          <textarea
+            value={homeVideoItemsText}
+            onChange={(event) => setHomeVideoItemsText(event.target.value)}
+            rows={5}
+            placeholder='[{"title":"Demo","mediaUrl":"https://youtube.com/watch?v=...","redirectUrl":"https://..."}]'
+            className="rounded-xl border border-border bg-white px-3 py-2 text-sm outline-none md:col-span-2"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={busy}
+          className="mt-4 rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-strong disabled:opacity-70"
+        >
+          Save homepage settings
+        </button>
+      </form>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Recommended businesses</h2>
+        <p className="mt-1 text-xs text-muted">
+          Mark approved businesses as recommended for homepage visibility.
+        </p>
+        <div className="mt-3 grid gap-2">
+          {!approvedBusinesses.length ? (
+            <p className="rounded-xl border border-border bg-surface p-3 text-sm text-muted">
+              No approved businesses found.
+            </p>
+          ) : null}
+          {approvedBusinesses.map((business) => (
+            <label
+              key={business.id}
+              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-3 py-2 text-sm"
+            >
+              <span>
+                {business.businessName} | {business.city}, {business.country}
+              </span>
+              <input
+                type="checkbox"
+                checked={Boolean(business.isRecommended)}
+                disabled={busy}
+                onChange={(event) =>
+                  void toggleRecommendation(business.id, event.target.checked)
+                }
+              />
+            </label>
+          ))}
+        </div>
+      </section>
 
       <section className="glass rounded-3xl p-6">
         <div className="flex items-center justify-between gap-2">

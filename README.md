@@ -48,6 +48,7 @@ copy .env.local.example .env.local
 - `NEXT_PUBLIC_ADMIN_EMAILS`, `ADMIN_EMAILS`
 - `FIREBASE_ADMIN_PROJECT_ID`, `FIREBASE_ADMIN_CLIENT_EMAIL`, `FIREBASE_ADMIN_PRIVATE_KEY`
 - payment/payout secrets
+- optional PayPal + currency config: `NEXT_PUBLIC_PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_ENV`, `USD_INR_RATE`
 - cron secrets
 
 4. Run dev server
@@ -78,7 +79,7 @@ Notes:
 ## Scheduler (Vercel Cron)
 - Configured in `vercel.json`
 - Path: `/api/cron/system`
-- Schedule: hourly (`10 * * * *`)
+- Schedule: daily (`10 0 * * *`)
 - Auth accepted by route:
   - `?token=<CRON_PUBLIC_TRIGGER_TOKEN>` query
   - `Authorization: Bearer <CRON_PUBLIC_TRIGGER_TOKEN or CRON_SECRET>`

@@ -4,10 +4,13 @@ import {
   createProductCheckoutPaymentIntent,
   createWalletTopupPaymentIntent,
   fetchPaymentIntentById,
+  PaymentCurrency,
+  PaymentProvider,
 } from "@/lib/firebase/repositories";
 import { enforceApiRateLimit, getRequestIdentifier } from "@/lib/api/rate-limit";
 import { AuthApiError, requireOwnerAuth } from "@/lib/server/auth";
 import { createRazorpayOrder } from "@/lib/server/payments/razorpay";
+import { createPayPalOrder } from "@/lib/server/payments/paypal";
 
 export const runtime = "nodejs";
 
@@ -22,6 +25,16 @@ export async function POST(request: NextRequest) {
 
     const body = (await request.json()) as Record<string, unknown>;
     const purpose = body.purpose === "product_checkout" ? "product_checkout" : "wallet_topup";
+    const providerRaw = String(body.provider ?? "").trim().toLowerCase();
+    const currencyRaw = String(body.currency ?? "INR").trim().toUpperCase();
+    const provider: PaymentProvider | undefined =
+      providerRaw === "razorpay" || providerRaw === "paypal" || providerRaw === "mock"
+        ? (providerRaw as PaymentProvider)
+        : undefined;
+    let currency: PaymentCurrency = currencyRaw === "USD" ? "USD" : "INR";
+    if (provider === "razorpay") {
+      currency = "INR";
+    }
     const ownerUid = String(body.ownerUid ?? "").trim();
     const ownerName = String(body.ownerName ?? "").trim() || "User";
     const ownerEmail = String(body.ownerEmail ?? "").trim();
@@ -53,6 +66,8 @@ export async function POST(request: NextRequest) {
         ownerName,
         ownerEmail,
         amount,
+        provider,
+        currency,
       });
     } else {
       const productSlug = String(body.productSlug ?? "").trim();
@@ -71,6 +86,8 @@ export async function POST(request: NextRequest) {
         ownerEmail,
         productSlug,
         pricingPlanKey,
+        provider,
+        currency,
       });
     }
 
@@ -96,6 +113,29 @@ export async function POST(request: NextRequest) {
         },
       });
       intent = await fetchPaymentIntentById(intent.id);
+    } else if (intent?.provider === "paypal" && !intent.providerOrderId) {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000";
+      const order = await createPayPalOrder({
+        amount: intent.amount,
+        currency: intent.currency,
+        intentId: intent.id,
+        description:
+          intent.purpose === "wallet_topup"
+            ? "Business Verifier wallet top-up"
+            : `Business Verifier checkout ${intent.productSlug ?? ""}`.trim(),
+        returnUrl: `${appUrl}/payments/paypal/${intent.id}`,
+        cancelUrl: `${appUrl}/payments/paypal/${intent.id}?cancelled=1`,
+      });
+      await attachPaymentIntentGatewayData({
+        intentId: intent.id,
+        providerOrderId: order.id,
+        paymentUrl: `${appUrl}/payments/paypal/${intent.id}`,
+        metadata: {
+          paypalOrderStatus: order.status,
+          paypalApproveLink: order.approveLink,
+        },
+      });
+      intent = await fetchPaymentIntentById(intent.id);
     }
     return NextResponse.json({
       ok: true,
@@ -105,6 +145,11 @@ export async function POST(request: NextRequest) {
             provider: "razorpay",
             keyId: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID?.trim() || process.env.RAZORPAY_KEY_ID?.trim() || "",
           }
+        : intent?.provider === "paypal"
+          ? {
+              provider: "paypal",
+              clientId: process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID?.trim() || "",
+            }
         : {
             provider: "mock",
           },

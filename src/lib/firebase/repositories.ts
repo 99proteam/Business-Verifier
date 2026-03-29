@@ -204,6 +204,9 @@ export interface BusinessApplicationRecord extends BusinessApplicationInput {
   ownerUid: string;
   slug: string;
   status: "pending" | "approved" | "rejected";
+  isRecommended?: boolean;
+  recommendedMarkedBy?: string;
+  recommendedMarkedAt?: string;
   certificateId?: string;
   certificateSerial?: string;
   trustScore: number;
@@ -490,6 +493,13 @@ function mapBusinessApplication(snapshotId: string, data: Record<string, unknown
       : undefined,
     slug: String(data.slug ?? toSlug(String(data.businessName ?? snapshotId))),
     status: (data.status as BusinessApplicationRecord["status"]) ?? "pending",
+    isRecommended: Boolean(data.isRecommended),
+    recommendedMarkedBy: data.recommendedMarkedBy
+      ? String(data.recommendedMarkedBy)
+      : undefined,
+    recommendedMarkedAt: data.recommendedMarkedAt
+      ? toISODate(data.recommendedMarkedAt)
+      : undefined,
     certificateId: data.certificateId ? String(data.certificateId) : undefined,
     certificateSerial: data.certificateSerial
       ? String(data.certificateSerial)
@@ -602,6 +612,9 @@ export async function createBusinessApplication(
     ownerUid,
     slug: toSlug(input.businessName),
     status: "pending" as const,
+    isRecommended: false,
+    recommendedMarkedBy: null,
+    recommendedMarkedAt: null,
     certificateId: null,
     certificateSerial: null,
     followersCount: 0,
@@ -807,6 +820,212 @@ export async function fetchPublicBusinessDirectory() {
       if (b.trustScore !== a.trustScore) return b.trustScore - a.trustScore;
       return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
     });
+}
+
+export type HomeBusinessMode = "new" | "recommended" | "both";
+export type HomeContentModuleType =
+  | "new_business_sidebar"
+  | "recommended_business"
+  | "images_redirect"
+  | "videos_url";
+
+export interface HomeMediaItemRecord {
+  title: string;
+  mediaUrl: string;
+  redirectUrl: string;
+}
+
+export interface HomePageSettingsRecord {
+  businessMode: HomeBusinessMode;
+  businessLimit: number;
+  newBusinessWindowDays: number;
+  enabledModules: HomeContentModuleType[];
+  imageItems: HomeMediaItemRecord[];
+  videoItems: HomeMediaItemRecord[];
+  updatedAt?: string;
+}
+
+export interface HomePageShowcaseRecord {
+  settings: HomePageSettingsRecord;
+  businesses: BusinessApplicationRecord[];
+}
+
+const homePageDefaults: HomePageSettingsRecord = {
+  businessMode: "both",
+  businessLimit: 20,
+  newBusinessWindowDays: 30,
+  enabledModules: [
+    "new_business_sidebar",
+    "recommended_business",
+    "images_redirect",
+    "videos_url",
+  ],
+  imageItems: [],
+  videoItems: [],
+};
+
+const allowedHomeModules: HomeContentModuleType[] = [
+  "new_business_sidebar",
+  "recommended_business",
+  "images_redirect",
+  "videos_url",
+];
+
+function normalizeHomeModules(raw: unknown): HomeContentModuleType[] {
+  if (!Array.isArray(raw)) return [...homePageDefaults.enabledModules];
+  const values = raw
+    .map((entry) => String(entry ?? "").trim() as HomeContentModuleType)
+    .filter((entry): entry is HomeContentModuleType =>
+      allowedHomeModules.includes(entry),
+    );
+  const deduped = Array.from(new Set(values));
+  return deduped.length ? deduped : [...homePageDefaults.enabledModules];
+}
+
+function normalizeHomeMediaItems(raw: unknown): HomeMediaItemRecord[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => {
+      const row = entry as Record<string, unknown>;
+      const title = String(row.title ?? "").trim();
+      const mediaUrl = String(row.mediaUrl ?? "").trim();
+      const redirectUrl = String(row.redirectUrl ?? "").trim();
+      if (!mediaUrl || !redirectUrl) return null;
+      return {
+        title: title || "Media",
+        mediaUrl,
+        redirectUrl,
+      } satisfies HomeMediaItemRecord;
+    })
+    .filter((row): row is HomeMediaItemRecord => Boolean(row))
+    .slice(0, 30);
+}
+
+function mapHomePageSettings(data: Record<string, unknown>) {
+  const rawMode = String(data.businessMode ?? homePageDefaults.businessMode).trim();
+  const businessMode: HomeBusinessMode =
+    rawMode === "new" || rawMode === "recommended" || rawMode === "both"
+      ? rawMode
+      : "both";
+  return {
+    businessMode,
+    businessLimit: Math.max(1, Math.min(20, Number(data.businessLimit ?? homePageDefaults.businessLimit))),
+    newBusinessWindowDays: Math.max(
+      1,
+      Math.min(180, Number(data.newBusinessWindowDays ?? homePageDefaults.newBusinessWindowDays)),
+    ),
+    enabledModules: normalizeHomeModules(data.enabledModules),
+    imageItems: normalizeHomeMediaItems(data.imageItems),
+    videoItems: normalizeHomeMediaItems(data.videoItems),
+    updatedAt: data.updatedAt ? toISODate(data.updatedAt) : undefined,
+  } satisfies HomePageSettingsRecord;
+}
+
+export async function fetchHomePageSettings() {
+  const database = getDb();
+  const ref = doc(database, "platformSettings", "homepage");
+  const snapshot = await getDoc(ref);
+  if (!snapshot.exists()) {
+    await setDoc(ref, {
+      ...homePageDefaults,
+      updatedAt: serverTimestamp(),
+    });
+    return homePageDefaults;
+  }
+  return mapHomePageSettings(snapshot.data());
+}
+
+export async function updateHomePageSettings(payload: {
+  adminUid: string;
+  businessMode: HomeBusinessMode;
+  businessLimit: number;
+  newBusinessWindowDays: number;
+  enabledModules: HomeContentModuleType[];
+  imageItems: HomeMediaItemRecord[];
+  videoItems: HomeMediaItemRecord[];
+}) {
+  const database = getDb();
+  await setDoc(
+    doc(database, "platformSettings", "homepage"),
+    {
+      businessMode: payload.businessMode,
+      businessLimit: Math.max(1, Math.min(20, Math.round(payload.businessLimit))),
+      newBusinessWindowDays: Math.max(
+        1,
+        Math.min(180, Math.round(payload.newBusinessWindowDays)),
+      ),
+      enabledModules: normalizeHomeModules(payload.enabledModules),
+      imageItems: normalizeHomeMediaItems(payload.imageItems),
+      videoItems: normalizeHomeMediaItems(payload.videoItems),
+      updatedBy: payload.adminUid,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+export async function adminSetBusinessRecommendation(payload: {
+  adminUid: string;
+  businessId: string;
+  isRecommended: boolean;
+}) {
+  const database = getDb();
+  const ref = doc(database, "businessApplications", payload.businessId);
+  await updateDoc(ref, {
+    isRecommended: payload.isRecommended,
+    recommendedMarkedBy: payload.isRecommended ? payload.adminUid : null,
+    recommendedMarkedAt: payload.isRecommended ? serverTimestamp() : null,
+    updatedAt: serverTimestamp(),
+  });
+  await recordAuditEvent({
+    actorUid: payload.adminUid,
+    actorRole: "admin",
+    action: payload.isRecommended ? "business_recommended" : "business_recommendation_removed",
+    targetType: "business_application",
+    targetId: payload.businessId,
+    summary: payload.isRecommended
+      ? "Marked business as recommended."
+      : "Removed business from recommended list.",
+  });
+}
+
+export async function fetchHomePageShowcase() {
+  const [settings, businesses] = await Promise.all([
+    fetchHomePageSettings(),
+    fetchPublicBusinessDirectory(),
+  ]);
+
+  const now = Date.now();
+  const newCutoff = now - settings.newBusinessWindowDays * 24 * 60 * 60 * 1000;
+  const newBusinesses = businesses.filter(
+    (row) => Date.parse(row.createdAt) >= newCutoff,
+  );
+  const recommendedBusinesses = businesses.filter((row) => Boolean(row.isRecommended));
+
+  let selected: BusinessApplicationRecord[] = [];
+  if (settings.businessMode === "new") {
+    selected = newBusinesses;
+  } else if (settings.businessMode === "recommended") {
+    selected = recommendedBusinesses;
+  } else {
+    const map = new Map<string, BusinessApplicationRecord>();
+    for (const row of recommendedBusinesses) map.set(row.id, row);
+    for (const row of newBusinesses) {
+      if (!map.has(row.id)) map.set(row.id, row);
+    }
+    selected = Array.from(map.values()).sort((a, b) => {
+      const aRecommended = a.isRecommended ? 1 : 0;
+      const bRecommended = b.isRecommended ? 1 : 0;
+      if (bRecommended !== aRecommended) return bRecommended - aRecommended;
+      if (b.trustScore !== a.trustScore) return b.trustScore - a.trustScore;
+      return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+    });
+  }
+
+  return {
+    settings,
+    businesses: selected.slice(0, Math.max(1, Math.min(20, settings.businessLimit))),
+  } satisfies HomePageShowcaseRecord;
 }
 
 export async function fetchBusinessBySlug(slug: string) {
@@ -3330,6 +3549,8 @@ export interface WithdrawalRequestRecord {
 
 export type PaymentIntentPurpose = "wallet_topup" | "product_checkout";
 export type PaymentIntentStatus = "created" | "processing" | "paid" | "failed" | "cancelled";
+export type PaymentCurrency = "INR" | "USD";
+export type PaymentProvider = "mock" | "razorpay" | "paypal";
 
 export interface PaymentIntentRecord {
   id: string;
@@ -3337,8 +3558,8 @@ export interface PaymentIntentRecord {
   ownerName: string;
   ownerEmail: string;
   amount: number;
-  currency: "INR";
-  provider: "mock" | "razorpay";
+  currency: PaymentCurrency;
+  provider: PaymentProvider;
   purpose: PaymentIntentPurpose;
   status: PaymentIntentStatus;
   productSlug?: string;
@@ -3844,18 +4065,37 @@ function paymentProviderFromEnv() {
   const raw = String(process.env.PAYMENT_PROVIDER ?? "mock")
     .trim()
     .toLowerCase();
-  return raw === "razorpay" ? "razorpay" : "mock";
+  if (raw === "razorpay") return "razorpay";
+  if (raw === "paypal") return "paypal";
+  return "mock";
+}
+
+function normalizePaymentCurrency(raw: unknown): PaymentCurrency {
+  const value = String(raw ?? "INR").trim().toUpperCase();
+  return value === "USD" ? "USD" : "INR";
+}
+
+function convertAmountForCurrency(amountInInr: number, currency: PaymentCurrency) {
+  if (currency === "INR") return Math.max(1, Math.round(amountInInr * 100) / 100);
+  const usdInrRate = Math.max(1, Number(process.env.USD_INR_RATE ?? "83"));
+  const usdAmount = amountInInr / usdInrRate;
+  return Math.max(0.5, Math.round(usdAmount * 100) / 100);
 }
 
 function mapPaymentIntent(snapshotId: string, data: Record<string, unknown>) {
+  const currency = normalizePaymentCurrency(data.currency);
+  const provider = String(data.provider ?? "mock").trim().toLowerCase();
   return {
     id: snapshotId,
     ownerUid: String(data.ownerUid ?? ""),
     ownerName: String(data.ownerName ?? "User"),
     ownerEmail: String(data.ownerEmail ?? ""),
     amount: Number(data.amount ?? 0),
-    currency: "INR",
-    provider: (String(data.provider ?? "mock") as PaymentIntentRecord["provider"]) ?? "mock",
+    currency,
+    provider:
+      provider === "razorpay" || provider === "paypal" || provider === "mock"
+        ? (provider as PaymentProvider)
+        : "mock",
     purpose: (String(data.purpose ?? "wallet_topup") as PaymentIntentPurpose) ?? "wallet_topup",
     status: (String(data.status ?? "created") as PaymentIntentStatus) ?? "created",
     productSlug: data.productSlug ? String(data.productSlug) : undefined,
@@ -3893,18 +4133,22 @@ export async function createWalletTopupPaymentIntent(payload: {
   ownerName: string;
   ownerEmail: string;
   amount: number;
+  provider?: PaymentProvider;
+  currency?: PaymentCurrency;
 }) {
   if (payload.amount <= 0) {
     throw new Error("Top-up amount must be greater than zero.");
   }
   const database = getDb();
-  const provider = paymentProviderFromEnv();
+  const provider = payload.provider ?? paymentProviderFromEnv();
+  const currency = normalizePaymentCurrency(payload.currency);
+  const amount = convertAmountForCurrency(payload.amount, currency);
   const intentRef = await addDoc(collection(database, "paymentIntents"), {
     ownerUid: payload.ownerUid,
     ownerName: payload.ownerName,
     ownerEmail: payload.ownerEmail,
-    amount: payload.amount,
-    currency: "INR",
+    amount,
+    currency,
     provider,
     purpose: "wallet_topup",
     status: "created",
@@ -3918,6 +4162,8 @@ export async function createWalletTopupPaymentIntent(payload: {
   const paymentUrl =
     provider === "razorpay"
       ? `${baseUrl()}/payments/razorpay/${intentRef.id}`
+      : provider === "paypal"
+        ? `${baseUrl()}/payments/paypal/${intentRef.id}`
       : `${baseUrl()}/payments/mock/${intentRef.id}`;
   await updateDoc(doc(database, "paymentIntents", intentRef.id), {
     paymentUrl,
@@ -3933,18 +4179,22 @@ export async function createProductCheckoutPaymentIntent(payload: {
   ownerEmail: string;
   productSlug: string;
   pricingPlanKey?: string;
+  provider?: PaymentProvider;
+  currency?: PaymentCurrency;
 }) {
   const product = await fetchDigitalProductBySlug(payload.productSlug);
   if (!product) throw new Error("Product not found.");
   const selectedPlan = resolveProductPricingPlan(product, payload.pricingPlanKey);
   const database = getDb();
-  const provider = paymentProviderFromEnv();
+  const provider = payload.provider ?? paymentProviderFromEnv();
+  const currency = normalizePaymentCurrency(payload.currency);
+  const amount = convertAmountForCurrency(selectedPlan.price, currency);
   const intentRef = await addDoc(collection(database, "paymentIntents"), {
     ownerUid: payload.ownerUid,
     ownerName: payload.ownerName,
     ownerEmail: payload.ownerEmail,
-    amount: selectedPlan.price,
-    currency: "INR",
+    amount,
+    currency,
     provider,
     purpose: "product_checkout",
     productSlug: product.uniqueLinkSlug,
@@ -3959,6 +4209,7 @@ export async function createProductCheckoutPaymentIntent(payload: {
       pricingPlanKey: selectedPlan.key,
       pricingPlanName: selectedPlan.name,
       pricingPlanBillingCycle: selectedPlan.billingCycle,
+      baseAmountInr: String(selectedPlan.price),
     },
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -3966,6 +4217,8 @@ export async function createProductCheckoutPaymentIntent(payload: {
   const paymentUrl =
     provider === "razorpay"
       ? `${baseUrl()}/payments/razorpay/${intentRef.id}`
+      : provider === "paypal"
+        ? `${baseUrl()}/payments/paypal/${intentRef.id}`
       : `${baseUrl()}/payments/mock/${intentRef.id}`;
   await updateDoc(doc(database, "paymentIntents", intentRef.id), {
     paymentUrl,
@@ -3987,11 +4240,18 @@ export async function attachPaymentIntentGatewayData(payload: {
   if (!snapshot.exists()) {
     throw new Error("Payment intent not found.");
   }
+  const existing = mapPaymentIntent(snapshot.id, snapshot.data());
+  const fallbackPath =
+    existing.provider === "razorpay"
+      ? `/payments/razorpay/${payload.intentId}`
+      : existing.provider === "paypal"
+        ? `/payments/paypal/${payload.intentId}`
+        : `/payments/mock/${payload.intentId}`;
   await updateDoc(ref, {
     providerOrderId: payload.providerOrderId,
     paymentUrl:
       payload.paymentUrl?.trim() ||
-      `${baseUrl()}/payments/razorpay/${payload.intentId}`,
+      `${baseUrl()}${fallbackPath}`,
     status: "processing",
     metadata: {
       ...((snapshot.data().metadata as Record<string, string> | undefined) ?? {}),
@@ -4085,7 +4345,9 @@ export async function markPaymentIntentAsPaid(payload: {
       payload.providerPaymentId?.trim() ||
       (intent.provider === "mock"
         ? `mock_pay_${intent.id.slice(0, 14)}`
-        : `rzp_pay_${intent.id.slice(0, 14)}`),
+        : intent.provider === "paypal"
+          ? `pp_pay_${intent.id.slice(0, 14)}`
+          : `rzp_pay_${intent.id.slice(0, 14)}`),
     orderId: orderId ?? null,
     paidAt: serverTimestamp(),
     updatedAt: serverTimestamp(),

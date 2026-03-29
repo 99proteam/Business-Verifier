@@ -1,16 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f6f6ef;
-  --surface: #fffef8;
-  --foreground: #13201a;
-  --muted: #607066;
-  --brand: #0f8a5f;
-  --brand-strong: #075d40;
-  --accent: #f5bb43;
-  --danger: #b8322a;
-  --ring: rgba(15, 138, 95, 0.35);
-  --border: #d9decf;
+  --background: #ffffff;
+  --surface: #ffffff;
+  --foreground: #111111;
+  --muted: #5f6368;
+  --brand: #0a66c2;
+  --brand-strong: #004182;
+  --accent: #e9f2ff;
+  --danger: #b42318;
+  --ring: rgba(10, 102, 194, 0.2);
+  --border: #e5e7eb;
 }
 
 @theme inline {
@@ -32,20 +32,16 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sora), sans-serif;
-  background-image:
-    radial-gradient(circle at 0% 0%, rgba(245, 187, 67, 0.25), transparent 28%),
-    radial-gradient(circle at 100% 0%, rgba(15, 138, 95, 0.18), transparent 34%),
-    linear-gradient(180deg, #f6f6ef 0%, #f4f7f0 48%, #f7f9ef 100%);
 }
 
 ::selection {
-  background: rgba(15, 138, 95, 0.22);
+  background: rgba(10, 102, 194, 0.18);
 }
 
 .glass {
-  background: color-mix(in srgb, var(--surface) 88%, white 12%);
+  background: var(--surface);
   border: 1px solid var(--border);
-  box-shadow: 0 20px 40px rgba(18, 36, 31, 0.06);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
 }
 
 .noise-bg {
@@ -53,13 +49,7 @@ body {
 }
 
 .noise-bg::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  background-image: radial-gradient(#0f8a5f 0.65px, transparent 0.65px);
-  background-size: 7px 7px;
+  display: none;
 }
 
 .focus-ring {

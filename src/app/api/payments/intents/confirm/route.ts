@@ -7,6 +7,7 @@ import {
 import { enforceApiRateLimit, getRequestIdentifier } from "@/lib/api/rate-limit";
 import { AuthApiError, verifyRequestAuth } from "@/lib/server/auth";
 import { verifyRazorpayPaymentSignature } from "@/lib/server/payments/razorpay";
+import { capturePayPalOrder } from "@/lib/server/payments/paypal";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,7 @@ export async function POST(request: NextRequest) {
       : undefined;
     const providerOrderId = body.providerOrderId ? String(body.providerOrderId).trim() : "";
     const providerSignature = body.providerSignature ? String(body.providerSignature).trim() : "";
+    let resolvedProviderPaymentId = providerPaymentId;
     if (!intentId) {
       return NextResponse.json({ ok: false, error: "intentId is required." }, { status: 400 });
     }
@@ -77,11 +79,41 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
+    } else if (intent.provider === "paypal") {
+      const orderId = providerOrderId || intent.providerOrderId || "";
+      if (!orderId) {
+        return NextResponse.json(
+          { ok: false, error: "PayPal confirmation requires providerOrderId." },
+          { status: 400 },
+        );
+      }
+      if (intent.providerOrderId && intent.providerOrderId !== orderId) {
+        return NextResponse.json(
+          { ok: false, error: "Provider order mismatch for payment intent." },
+          { status: 400 },
+        );
+      }
+      const capture = await capturePayPalOrder({ orderId });
+      if (capture.status !== "COMPLETED") {
+        await markPaymentIntentAsFailed({
+          intentId,
+          reason: `PayPal capture returned status ${capture.status}.`,
+          actorUid,
+          actorRole: "system",
+        });
+        return NextResponse.json(
+          { ok: false, error: `PayPal capture not completed. Status: ${capture.status}` },
+          { status: 400 },
+        );
+      }
+      if (!resolvedProviderPaymentId && capture.captureId) {
+        resolvedProviderPaymentId = capture.captureId;
+      }
     }
 
     const result = await markPaymentIntentAsPaid({
       intentId,
-      providerPaymentId,
+      providerPaymentId: resolvedProviderPaymentId,
       actorUid,
       actorRole,
     });

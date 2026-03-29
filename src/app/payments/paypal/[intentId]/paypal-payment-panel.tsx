@@ -1,18 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/providers/auth-provider";
 import { fetchPaymentIntentById, PaymentIntentRecord } from "@/lib/firebase/repositories";
 
-export function MockPaymentPanel({ intentId }: { intentId: string }) {
+export function PayPalPaymentPanel({ intentId }: { intentId: string }) {
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [intent, setIntent] = useState<PaymentIntentRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  const tokenOrderId = useMemo(() => {
+    const token = String(searchParams.get("token") ?? "").trim();
+    return token || "";
+  }, [searchParams]);
 
   useEffect(() => {
     let mounted = true;
@@ -27,7 +33,7 @@ export function MockPaymentPanel({ intentId }: { intentId: string }) {
           setError(
             loadError instanceof Error
               ? loadError.message
-              : "Unable to load payment intent.",
+              : "Unable to load PayPal payment intent.",
           );
         }
       } finally {
@@ -42,7 +48,13 @@ export function MockPaymentPanel({ intentId }: { intentId: string }) {
 
   async function confirmPayment() {
     if (!user) {
-      setError("Sign in first to confirm mock payment.");
+      setError("Please sign in first.");
+      return;
+    }
+    if (!intent) return;
+    const providerOrderId = tokenOrderId || intent.providerOrderId || "";
+    if (!providerOrderId) {
+      setError("PayPal order id is missing. Please start checkout again.");
       return;
     }
     setBusy(true);
@@ -57,15 +69,16 @@ export function MockPaymentPanel({ intentId }: { intentId: string }) {
           authorization: `Bearer ${idToken}`,
         },
         body: JSON.stringify({
-          intentId,
+          intentId: intent.id,
+          providerOrderId,
         }),
       });
       const payload = (await response.json()) as Record<string, unknown>;
       if (!response.ok || !payload.ok) {
-        throw new Error(String(payload.error ?? "Unable to confirm payment."));
+        throw new Error(String(payload.error ?? "Unable to confirm PayPal payment."));
       }
       const result = payload.result as Record<string, unknown>;
-      setInfo("Payment marked successful.");
+      setInfo("PayPal payment confirmed.");
       if (result.orderId) {
         router.push(`/dashboard/orders/${String(result.orderId)}`);
       } else {
@@ -75,7 +88,7 @@ export function MockPaymentPanel({ intentId }: { intentId: string }) {
       setError(
         confirmError instanceof Error
           ? confirmError.message
-          : "Unable to confirm payment.",
+          : "Unable to confirm PayPal payment.",
       );
     } finally {
       setBusy(false);
@@ -85,7 +98,7 @@ export function MockPaymentPanel({ intentId }: { intentId: string }) {
   if (loading) {
     return (
       <div className="rounded-2xl border border-border bg-surface p-4 text-sm text-muted">
-        Loading mock payment...
+        Loading PayPal checkout...
       </div>
     );
   }
@@ -106,36 +119,49 @@ export function MockPaymentPanel({ intentId }: { intentId: string }) {
     );
   }
 
+  const approvalUrl = String(intent.metadata?.paypalApproveLink ?? "").trim();
+  const wasCancelled = searchParams.get("cancelled") === "1";
+
   return (
     <section className="glass mx-auto max-w-lg rounded-3xl p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Mock Payment Gateway</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">PayPal Checkout</h1>
       <p className="mt-2 text-sm text-muted">
         Intent {intent.id} | Purpose {intent.purpose.replaceAll("_", " ")}
       </p>
       <p className="mt-2 text-lg font-semibold">
         Amount {intent.currency} {intent.amount}
       </p>
-      <p className="mt-1 text-xs text-muted">Status {intent.status}</p>
+      <p className="mt-1 text-xs text-muted">Order {intent.providerOrderId || tokenOrderId || "pending"}</p>
 
-      {info && (
-        <div className="mt-3 rounded-xl border border-brand/40 bg-brand/10 p-3 text-sm">
-          {info}
-        </div>
-      )}
-      {error && (
+      {wasCancelled ? (
         <div className="mt-3 rounded-xl border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
-          {error}
+          PayPal checkout was cancelled. You can reopen checkout and continue.
         </div>
-      )}
+      ) : null}
+      {info ? (
+        <div className="mt-3 rounded-xl border border-brand/40 bg-brand/10 p-3 text-sm">{info}</div>
+      ) : null}
 
-      <button
-        type="button"
-        disabled={busy || intent.status === "paid"}
-        onClick={() => void confirmPayment()}
-        className="mt-5 rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-strong disabled:opacity-70"
-      >
-        {busy ? "Processing..." : intent.status === "paid" ? "Already paid" : "Mark payment successful"}
-      </button>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <a
+          href={approvalUrl || "#"}
+          target="_blank"
+          rel="noreferrer"
+          className={`rounded-xl px-4 py-2 text-sm font-medium text-white transition ${
+            approvalUrl ? "bg-brand hover:bg-brand-strong" : "cursor-not-allowed bg-muted/70"
+          }`}
+        >
+          Open PayPal
+        </a>
+        <button
+          type="button"
+          disabled={busy || intent.status === "paid"}
+          onClick={() => void confirmPayment()}
+          className="rounded-xl border border-border px-4 py-2 text-sm transition hover:border-brand/40 disabled:opacity-70"
+        >
+          {busy ? "Confirming..." : intent.status === "paid" ? "Already paid" : "I completed payment"}
+        </button>
+      </div>
     </section>
   );
 }
