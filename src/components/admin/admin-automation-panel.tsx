@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
+  AutomationJobRunRecord,
+  fetchAutomationJobRuns,
   generateInvoicesForAllBusinesses,
   releaseDueEscrowOrders,
   releaseMaturedProDeposits,
@@ -18,6 +20,20 @@ export function AdminAutomationPanel() {
   const [automationSecret, setAutomationSecret] = useState("");
   const [exportSecret, setExportSecret] = useState("");
   const [geoSecret, setGeoSecret] = useState("");
+  const [cronToken, setCronToken] = useState("");
+  const [runs, setRuns] = useState<AutomationJobRunRecord[]>([]);
+
+  const loadRuns = useCallback(async () => {
+    try {
+      setRuns(await fetchAutomationJobRuns(80));
+    } catch {
+      setRuns([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRuns();
+  }, [loadRuns]);
 
   async function runInvoices() {
     if (!user) return;
@@ -27,6 +43,7 @@ export function AdminAutomationPanel() {
     try {
       const ids = await generateInvoicesForAllBusinesses();
       setInfo(`Generated ${ids.length} invoice(s) for current month.`);
+      await loadRuns();
     } catch (runError) {
       setError(
         runError instanceof Error ? runError.message : "Unable to generate invoices.",
@@ -47,6 +64,7 @@ export function AdminAutomationPanel() {
         adminName: user.displayName ?? "Admin",
       });
       setInfo(`Escrow release: due ${result.due}, released ${result.released}.`);
+      await loadRuns();
     } catch (runError) {
       setError(
         runError instanceof Error
@@ -71,6 +89,7 @@ export function AdminAutomationPanel() {
       setInfo(
         `Deposit release: checked ${result.checked}, released ${result.released}, businesses ${result.businessesUpdated}.`,
       );
+      await loadRuns();
     } catch (runError) {
       setError(
         runError instanceof Error
@@ -94,6 +113,7 @@ export function AdminAutomationPanel() {
       setInfo(
         `Billing maintenance: overdue ${result.overdueMarked}, late fees ${result.lateFeesApplied}, reminders ${result.remindersSent}.`,
       );
+      await loadRuns();
     } catch (runError) {
       setError(
         runError instanceof Error
@@ -128,6 +148,7 @@ export function AdminAutomationPanel() {
         throw new Error(String(payload.error ?? "Unable to run automation bundle."));
       }
       setInfo("Run-all automation completed.");
+      await loadRuns();
     } catch (runError) {
       setError(
         runError instanceof Error ? runError.message : "Unable to run full automation.",
@@ -232,7 +253,7 @@ export function AdminAutomationPanel() {
       <section className="glass rounded-3xl p-6">
         <h1 className="text-2xl font-semibold tracking-tight">Automation monitor</h1>
         <p className="mt-2 text-sm text-muted">
-          Manual run panel for scheduler jobs until production cron orchestration is wired.
+          Manual and scheduled automation controls for invoices, escrow release, deposits, and billing.
         </p>
         <div className="mt-3 grid gap-2 md:grid-cols-2">
           <input
@@ -295,6 +316,30 @@ export function AdminAutomationPanel() {
       </section>
 
       <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Managed Scheduler Wiring</h2>
+        <p className="mt-1 text-xs text-muted">
+          Production cron endpoint: <span className="font-mono">/api/cron/system?token=&lt;CRON_PUBLIC_TRIGGER_TOKEN&gt;</span>
+        </p>
+        <div className="mt-3 grid gap-2 md:grid-cols-[1fr_auto]">
+          <input
+            value={cronToken}
+            onChange={(event) => setCronToken(event.target.value)}
+            type="password"
+            placeholder="Cron token"
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          />
+          <a
+            href={`/api/cron/system?token=${encodeURIComponent(cronToken)}${monthKey ? `&monthKey=${encodeURIComponent(monthKey)}` : ""}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
+          >
+            Trigger cron endpoint
+          </a>
+        </div>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
         <h2 className="text-lg font-semibold tracking-tight">Reconciliation exports</h2>
         <p className="mt-1 text-xs text-muted">
           Provide admin export secret to download month-wise finance reconciliation.
@@ -346,6 +391,33 @@ export function AdminAutomationPanel() {
         >
           Run geo import
         </button>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold tracking-tight">Automation run history</h2>
+          <button
+            type="button"
+            onClick={() => void loadRuns()}
+            className="rounded-xl border border-border px-3 py-2 text-xs transition hover:border-brand/40"
+          >
+            Refresh
+          </button>
+        </div>
+        <div className="mt-3 space-y-2">
+          {!runs.length && <p className="text-sm text-muted">No automation runs recorded yet.</p>}
+          {runs.map((row) => (
+            <article key={row.id} className="rounded-2xl border border-border bg-surface p-3 text-sm">
+              <p className="font-medium">
+                {row.jobKey} | {row.status}
+              </p>
+              <p className="text-xs text-muted">{row.summary}</p>
+              <p className="text-xs text-muted">
+                Source {row.source} | {new Date(row.createdAt).toLocaleString()}
+              </p>
+            </article>
+          ))}
+        </div>
       </section>
 
       {info && (

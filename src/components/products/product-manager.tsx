@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   createDigitalProduct,
+  DigitalProductPricingCycle,
+  DigitalProductPricingPlanRecord,
   DigitalProductRecord,
   fetchDigitalProductsByOwner,
+  sendProductOfferToFavoriteCustomers,
 } from "@/lib/firebase/repositories";
 
 const schema = z.object({
@@ -33,6 +36,14 @@ export function ProductManager() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [offerProductId, setOfferProductId] = useState("");
+  const [offerTitle, setOfferTitle] = useState("");
+  const [offerMessage, setOfferMessage] = useState("");
+  const [offerBusy, setOfferBusy] = useState(false);
+  const [pricingPlans, setPricingPlans] = useState<DigitalProductPricingPlanRecord[]>([]);
+  const [planName, setPlanName] = useState("");
+  const [planCycle, setPlanCycle] = useState<DigitalProductPricingCycle>("one_time");
+  const [planPrice, setPlanPrice] = useState("0");
 
   const {
     register,
@@ -46,7 +57,7 @@ export function ProductManager() {
     },
   });
 
-  async function loadProducts() {
+  const loadProducts = useCallback(async () => {
     if (!user || !hasFirebaseConfig) {
       setLoading(false);
       return;
@@ -64,11 +75,22 @@ export function ProductManager() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [hasFirebaseConfig, user]);
 
   useEffect(() => {
     void loadProducts();
-  }, [hasFirebaseConfig, user]);
+  }, [loadProducts]);
+
+  useEffect(() => {
+    if (!rows.length) {
+      setOfferProductId("");
+      return;
+    }
+    setOfferProductId((previous) => {
+      if (previous && rows.some((row) => row.id === previous)) return previous;
+      return rows[0].id;
+    });
+  }, [rows]);
 
   const onSubmit = async (value: ProductInput) => {
     if (!user) {
@@ -92,9 +114,14 @@ export function ProductManager() {
         price: value.price,
         noRefund: value.noRefund,
         category: value.category,
+        pricingPlans: pricingPlans.length ? pricingPlans : undefined,
       });
       setInfo("Digital product created.");
       reset({ noRefund: false });
+      setPricingPlans([]);
+      setPlanName("");
+      setPlanCycle("one_time");
+      setPlanPrice("0");
       await loadProducts();
     } catch (submitError) {
       setError(
@@ -104,6 +131,80 @@ export function ProductManager() {
       );
     }
   };
+
+  function addPricingPlan() {
+    const name = planName.trim();
+    const price = Number(planPrice);
+    if (!name || !Number.isFinite(price) || price <= 0) {
+      setError("Pricing plan requires name and valid positive price.");
+      return;
+    }
+    const key = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    if (!key) {
+      setError("Invalid pricing plan name.");
+      return;
+    }
+    if (pricingPlans.some((row) => row.key === key)) {
+      setError("Pricing plan with this name already exists.");
+      return;
+    }
+    setError(null);
+    setPricingPlans((previous) => [
+      ...previous,
+      {
+        key,
+        name,
+        billingCycle: planCycle,
+        price: Math.round(price),
+      },
+    ]);
+    setPlanName("");
+    setPlanCycle("one_time");
+    setPlanPrice("0");
+  }
+
+  async function sendOffer(event: FormEvent) {
+    event.preventDefault();
+    if (!user) {
+      setError("Please sign in first.");
+      return;
+    }
+    if (!offerProductId) {
+      setError("Select a product for the offer.");
+      return;
+    }
+    if (!offerTitle.trim() || !offerMessage.trim()) {
+      setError("Offer title and message are required.");
+      return;
+    }
+
+    setOfferBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const result = await sendProductOfferToFavoriteCustomers({
+        productId: offerProductId,
+        ownerUid: user.uid,
+        title: offerTitle,
+        message: offerMessage,
+      });
+      setInfo(
+        result.totalFavorites > 0
+          ? `Offer sent to ${result.delivered} favorite customer(s).`
+          : "No favorite customers found for this product yet.",
+      );
+      setOfferTitle("");
+      setOfferMessage("");
+      await loadProducts();
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : "Unable to send product offer.");
+    } finally {
+      setOfferBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -152,12 +253,114 @@ export function ProductManager() {
             )}
           </label>
         </div>
+        <div className="mt-4 rounded-2xl border border-border bg-surface p-4">
+          <p className="text-sm font-medium">Optional pricing plans</p>
+          <p className="mt-1 text-xs text-muted">
+            Add multiple plans (monthly/yearly/one-time). If none added, standard one-time plan uses base price.
+          </p>
+          <div className="mt-3 grid gap-2 md:grid-cols-4">
+            <input
+              value={planName}
+              onChange={(event) => setPlanName(event.target.value)}
+              placeholder="Plan name"
+              className="rounded-xl border border-border bg-white px-3 py-2 text-sm outline-none"
+            />
+            <select
+              value={planCycle}
+              onChange={(event) => setPlanCycle(event.target.value as DigitalProductPricingCycle)}
+              className="rounded-xl border border-border bg-white px-3 py-2 text-sm outline-none"
+            >
+              <option value="one_time">One time</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+            </select>
+            <input
+              type="number"
+              value={planPrice}
+              onChange={(event) => setPlanPrice(event.target.value)}
+              placeholder="Price"
+              className="rounded-xl border border-border bg-white px-3 py-2 text-sm outline-none"
+            />
+            <button
+              type="button"
+              onClick={addPricingPlan}
+              className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
+            >
+              Add plan
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {!pricingPlans.length && (
+              <span className="text-xs text-muted">No custom plans added yet.</span>
+            )}
+            {pricingPlans.map((plan) => (
+              <span
+                key={plan.key}
+                className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs"
+              >
+                {plan.name} | {plan.billingCycle} | INR {plan.price}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPricingPlans((previous) =>
+                      previous.filter((row) => row.key !== plan.key),
+                    )
+                  }
+                  className="text-danger"
+                >
+                  Remove
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
         <button
           type="submit"
           disabled={isSubmitting}
           className="mt-4 rounded-xl bg-brand px-3 py-2 text-sm font-medium text-white transition hover:bg-brand-strong disabled:opacity-70"
         >
           {isSubmitting ? "Saving..." : "Create product"}
+        </button>
+      </form>
+
+      <form onSubmit={sendOffer} className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Broadcast offer to favorites</h2>
+        <p className="mt-1 text-xs text-muted">
+          Send a targeted product offer notification to customers who favorited a product.
+        </p>
+        <div className="mt-4 grid gap-3">
+          <select
+            value={offerProductId}
+            onChange={(event) => setOfferProductId(event.target.value)}
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          >
+            {!rows.length && <option value="">No products available</option>}
+            {rows.map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.title} ({row.favoritesCount} favorites)
+              </option>
+            ))}
+          </select>
+          <input
+            value={offerTitle}
+            onChange={(event) => setOfferTitle(event.target.value)}
+            placeholder="Offer title"
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          />
+          <textarea
+            value={offerMessage}
+            onChange={(event) => setOfferMessage(event.target.value)}
+            rows={3}
+            placeholder="Offer message for favorite customers"
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={offerBusy || !rows.length}
+          className="mt-4 rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40 disabled:opacity-70"
+        >
+          {offerBusy ? "Sending..." : "Send offer broadcast"}
         </button>
       </form>
 
@@ -198,6 +401,13 @@ export function ProductManager() {
               </p>
             )}
             <p className="mt-2 text-xs text-muted">Product link key: {row.uniqueLinkSlug}</p>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
+              {row.pricingPlans.map((plan) => (
+                <span key={`${row.id}_${plan.key}`} className="rounded-full border border-border px-2 py-1">
+                  {plan.name} | {plan.billingCycle} | INR {plan.price}
+                </span>
+              ))}
+            </div>
           </article>
         ))}
       </section>

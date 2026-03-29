@@ -15,6 +15,15 @@ import {
   toggleBusinessFollow,
 } from "@/lib/firebase/repositories";
 
+type SearchHit = {
+  id: string;
+  type: "business" | "product" | "group" | "partnership";
+  title: string;
+  subtitle: string;
+  href: string;
+  score: number;
+};
+
 export default function DirectoryPage() {
   const { user, hasFirebaseConfig } = useAuth();
   const [tab, setTab] = useState<"online" | "offline">("online");
@@ -28,6 +37,8 @@ export default function DirectoryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const cityOptions = useMemo(() => {
     if (countryFilter) return countryCities;
     return [...new Set(rows.map((item) => item.city).filter(Boolean))].sort((a, b) =>
@@ -85,6 +96,39 @@ export default function DirectoryPage() {
       active = false;
     };
   }, [countryFilter]);
+
+  useEffect(() => {
+    let active = true;
+    const q = query.trim();
+    if (q.length < 2) {
+      setSearchHits([]);
+      return () => {
+        active = false;
+      };
+    }
+    setSearchLoading(true);
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch(`/api/search/global?q=${encodeURIComponent(q)}&limit=15`);
+          const payload = (await response.json()) as Record<string, unknown>;
+          if (!response.ok || !payload.ok) {
+            throw new Error(String(payload.error ?? "Search failed."));
+          }
+          if (!active) return;
+          setSearchHits((payload.hits as SearchHit[]) ?? []);
+        } catch {
+          if (active) setSearchHits([]);
+        } finally {
+          if (active) setSearchLoading(false);
+        }
+      })();
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
 
   const filteredRows = useMemo(() => {
     const textQuery = query.trim().toLowerCase();
@@ -198,6 +242,29 @@ export default function DirectoryPage() {
               className="w-full bg-transparent text-sm outline-none"
             />
           </div>
+          {(searchLoading || searchHits.length > 0) && (
+            <div className="mt-2 rounded-xl border border-border bg-surface p-2">
+              {searchLoading && (
+                <p className="px-2 py-1 text-xs text-muted">Searching across businesses, products, groups, and partnerships...</p>
+              )}
+              {!searchLoading && !searchHits.length && (
+                <p className="px-2 py-1 text-xs text-muted">No cross-module matches found.</p>
+              )}
+              {!searchLoading &&
+                searchHits.map((hit) => (
+                  <Link
+                    key={`${hit.type}_${hit.id}`}
+                    href={hit.href}
+                    className="block rounded-lg px-2 py-2 text-sm transition hover:bg-brand/10"
+                  >
+                    <p className="font-medium capitalize">
+                      {hit.title} <span className="text-xs text-muted">({hit.type})</span>
+                    </p>
+                    <p className="text-xs text-muted">{hit.subtitle}</p>
+                  </Link>
+                ))}
+            </div>
+          )}
 
           <div className="mt-3">
             <div className="grid gap-3 md:grid-cols-2">

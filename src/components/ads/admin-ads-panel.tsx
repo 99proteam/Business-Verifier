@@ -1,11 +1,15 @@
 "use client";
 
+import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
+  AdTagPlanRecord,
   AdCampaignRecord,
   AdCampaignStatus,
   adminReviewAdCampaign,
+  buildAdPerformanceCsv,
+  buildAdPerformanceReport,
   fetchAdPricingSettings,
   fetchAdminAdCampaigns,
   updateAdPricingSettings,
@@ -23,8 +27,16 @@ export function AdminAdsPanel() {
   const [homeBannerCpm, setHomeBannerCpm] = useState("120");
   const [directoryBannerCpm, setDirectoryBannerCpm] = useState("80");
   const [recommendedTagMonthly, setRecommendedTagMonthly] = useState("499");
+  const [recommendedTagYearly, setRecommendedTagYearly] = useState("4990");
+  const [customTagPlansText, setCustomTagPlansText] = useState("[]");
   const [cityTargetingSurchargePercent, setCityTargetingSurchargePercent] =
     useState("10");
+  const [reportSummary, setReportSummary] = useState<{
+    campaigns: number;
+    impressions: number;
+    clicks: number;
+    estimatedCost: number;
+  } | null>(null);
 
   const load = useCallback(async () => {
     if (!hasFirebaseConfig) {
@@ -38,10 +50,14 @@ export function AdminAdsPanel() {
         fetchAdminAdCampaigns(),
         fetchAdPricingSettings(),
       ]);
+      const report = await buildAdPerformanceReport();
       setRows(campaigns);
+      setReportSummary(report.summary);
       setHomeBannerCpm(String(settings.homeBannerCpm));
       setDirectoryBannerCpm(String(settings.directoryBannerCpm));
       setRecommendedTagMonthly(String(settings.recommendedTagMonthly));
+      setRecommendedTagYearly(String(settings.recommendedTagYearly));
+      setCustomTagPlansText(JSON.stringify(settings.customTagPlans ?? [], null, 2));
       setCityTargetingSurchargePercent(String(settings.cityTargetingSurchargePercent));
     } catch (loadError) {
       setError(
@@ -65,11 +81,24 @@ export function AdminAdsPanel() {
     setError(null);
     setInfo(null);
     try {
+      let customTagPlans: AdTagPlanRecord[] = [];
+      try {
+        const parsed = JSON.parse(customTagPlansText) as unknown;
+        customTagPlans = Array.isArray(parsed) ? (parsed as AdTagPlanRecord[]) : [];
+      } catch {
+        setError(
+          "Custom tag plans must be valid JSON array. Example: [{\"name\":\"featured\",\"monthlyPrice\":799,\"yearlyPrice\":7990}]",
+        );
+        setBusy(false);
+        return;
+      }
       await updateAdPricingSettings({
         adminUid: user.uid,
         homeBannerCpm: Number(homeBannerCpm),
         directoryBannerCpm: Number(directoryBannerCpm),
         recommendedTagMonthly: Number(recommendedTagMonthly),
+        recommendedTagYearly: Number(recommendedTagYearly),
+        customTagPlans,
         cityTargetingSurchargePercent: Number(cityTargetingSurchargePercent),
       });
       setInfo("Ad pricing settings updated.");
@@ -108,6 +137,27 @@ export function AdminAdsPanel() {
     }
   }
 
+  async function exportReportCsv() {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const csv = await buildAdPerformanceCsv();
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "ad-performance-admin.csv";
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+      setInfo("Admin ad performance CSV downloaded.");
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "Unable to export ad report.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!hasFirebaseConfig) {
     return (
       <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
@@ -131,6 +181,12 @@ export function AdminAdsPanel() {
         <p className="mt-2 text-sm text-muted">
           Review campaigns, control ad status, and manage pricing inputs used in billing.
         </p>
+        {reportSummary && (
+          <p className="mt-2 text-xs text-muted">
+            Campaigns {reportSummary.campaigns} | Impressions {reportSummary.impressions} |
+            Clicks {reportSummary.clicks} | Estimated unbilled INR {reportSummary.estimatedCost}
+          </p>
+        )}
       </div>
 
       {info && (
@@ -167,11 +223,25 @@ export function AdminAdsPanel() {
             className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
           />
           <input
+            value={recommendedTagYearly}
+            onChange={(event) => setRecommendedTagYearly(event.target.value)}
+            type="number"
+            placeholder="Recommended tag yearly price"
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          />
+          <input
             value={cityTargetingSurchargePercent}
             onChange={(event) => setCityTargetingSurchargePercent(event.target.value)}
             type="number"
             placeholder="City targeting surcharge %"
             className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          />
+          <textarea
+            value={customTagPlansText}
+            onChange={(event) => setCustomTagPlansText(event.target.value)}
+            rows={5}
+            placeholder='[{"name":"recommended_plus","monthlyPrice":899,"yearlyPrice":8990}]'
+            className="rounded-xl border border-border bg-white px-3 py-2 text-sm outline-none md:col-span-2"
           />
         </div>
         <button
@@ -184,7 +254,17 @@ export function AdminAdsPanel() {
       </form>
 
       <section className="glass rounded-3xl p-6">
-        <h2 className="text-lg font-semibold tracking-tight">Campaign review queue</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold tracking-tight">Campaign review queue</h2>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void exportReportCsv()}
+            className="rounded-xl border border-border px-3 py-2 text-xs transition hover:border-brand/40 disabled:opacity-70"
+          >
+            Export report CSV
+          </button>
+        </div>
         <div className="mt-4 space-y-3">
           {!rows.length && (
             <p className="rounded-2xl border border-border bg-surface p-3 text-sm text-muted">
@@ -204,7 +284,21 @@ export function AdminAdsPanel() {
               <p className="mt-1 text-xs text-muted">
                 Placement{" "}
                 {row.placement === "home_banner" ? "Home banner" : "Directory banner"} |
-                Impressions {row.impressions} | Billed {row.billedImpressions}
+                Impressions {row.impressions} | Clicks {row.clicks} | Billed {row.billedImpressions}
+              </p>
+              {row.tagPlanName && (
+                <p className="mt-1 text-xs text-muted">
+                  Tag plan {row.tagPlanName} | {row.tagPlanCycle} | INR{" "}
+                  {row.tagPlanCycle === "yearly"
+                    ? row.tagPlanYearlyPrice ?? 0
+                    : row.tagPlanMonthlyPrice ?? 0}
+                </p>
+              )}
+              <p className="mt-1 text-xs text-muted">
+                CTR{" "}
+                {row.impressions > 0
+                  ? `${Math.round((row.clicks / row.impressions) * 10000) / 100}%`
+                  : "0%"}
               </p>
               {row.cityTargets.length > 0 && (
                 <p className="mt-1 text-xs text-muted">
@@ -215,12 +309,16 @@ export function AdminAdsPanel() {
                 Created {new Date(row.createdAt).toLocaleString()}
               </p>
               <div className="mt-3 grid gap-3 md:grid-cols-[180px_1fr]">
-                <img
-                  src={row.imageUrl}
-                  alt={row.title}
-                  className="h-24 w-full rounded-xl object-cover"
-                  loading="lazy"
-                />
+                <div className="relative h-24 w-full overflow-hidden rounded-xl">
+                  <Image
+                    src={row.imageUrl}
+                    alt={row.title}
+                    fill
+                    sizes="180px"
+                    className="object-cover"
+                    unoptimized
+                  />
+                </div>
                 <a
                   href={row.destinationUrl}
                   target="_blank"

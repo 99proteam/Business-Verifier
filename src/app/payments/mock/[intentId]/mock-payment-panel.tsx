@@ -41,17 +41,23 @@ export function MockPaymentPanel({ intentId }: { intentId: string }) {
   }, [intentId]);
 
   async function confirmPayment() {
+    if (!user) {
+      setError("Sign in first to confirm mock payment.");
+      return;
+    }
     setBusy(true);
     setError(null);
     setInfo(null);
     try {
+      const idToken = await user.getIdToken();
       const response = await fetch("/api/payments/intents/confirm", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${idToken}`,
+        },
         body: JSON.stringify({
           intentId,
-          actorUid: user?.uid ?? "mock-customer",
-          actorRole: "customer",
         }),
       });
       const payload = (await response.json()) as Record<string, unknown>;

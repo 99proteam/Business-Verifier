@@ -4,16 +4,21 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   createNotificationEndpoint,
+  fetchNotificationDeliveryLogsByOwner,
   fetchNotificationApiCharges,
   fetchNotificationEndpointsByOwner,
   NotificationCategory,
+  NotificationDeliveryLogRecord,
   NotificationEndpointRecord,
+  NotificationEndpointIdentifierType,
+  ownerDisconnectNotificationEndpoint,
   sendNotificationViaEndpoint,
 } from "@/lib/firebase/repositories";
 
 export function BusinessNotificationManager() {
   const { user, hasFirebaseConfig } = useAuth();
   const [rows, setRows] = useState<NotificationEndpointRecord[]>([]);
+  const [logs, setLogs] = useState<NotificationDeliveryLogRecord[]>([]);
   const [monthlyBaseFee, setMonthlyBaseFee] = useState(99);
   const [per1000MessagesFee, setPer1000MessagesFee] = useState(25);
   const [loading, setLoading] = useState(true);
@@ -22,6 +27,9 @@ export function BusinessNotificationManager() {
   const [info, setInfo] = useState<string | null>(null);
 
   const [endpointLabel, setEndpointLabel] = useState("Primary Notification API");
+  const [identifierType, setIdentifierType] =
+    useState<NotificationEndpointIdentifierType>("permanent");
+  const [temporaryDurationDays, setTemporaryDurationDays] = useState("30");
   const [selectedEndpointId, setSelectedEndpointId] = useState("");
   const [endpointSecret, setEndpointSecret] = useState("");
   const [category, setCategory] = useState<NotificationCategory>("offers");
@@ -41,7 +49,9 @@ export function BusinessNotificationManager() {
         fetchNotificationEndpointsByOwner(user.uid),
         fetchNotificationApiCharges(),
       ]);
+      const deliveryLogs = await fetchNotificationDeliveryLogsByOwner(user.uid);
       setRows(endpoints);
+      setLogs(deliveryLogs);
       setMonthlyBaseFee(charges.monthlyBaseFee);
       setPer1000MessagesFee(charges.per1000MessagesFee);
       if (endpoints.length && !selectedEndpointId) {
@@ -74,11 +84,15 @@ export function BusinessNotificationManager() {
         ownerUid: user.uid,
         ownerName: user.displayName ?? "Business",
         label: endpointLabel.trim(),
+        identifierType,
+        temporaryDurationDays: Number(temporaryDurationDays),
       });
       setInfo(
         `Endpoint created: ${endpoint.endpointId}. Save secret now: ${endpoint.endpointSecret}`,
       );
       setEndpointLabel("Primary Notification API");
+      setIdentifierType("permanent");
+      setTemporaryDurationDays("30");
       await load();
       setSelectedEndpointId(endpoint.endpointId);
       setEndpointSecret(endpoint.endpointSecret);
@@ -87,6 +101,29 @@ export function BusinessNotificationManager() {
         createError instanceof Error
           ? createError.message
           : "Unable to create endpoint.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnectEndpoint(endpointId: string) {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await ownerDisconnectNotificationEndpoint({
+        endpointId,
+        ownerUid: user.uid,
+      });
+      setInfo("Endpoint disconnected.");
+      await load();
+    } catch (disconnectError) {
+      setError(
+        disconnectError instanceof Error
+          ? disconnectError.message
+          : "Unable to disconnect endpoint.",
       );
     } finally {
       setBusy(false);
@@ -180,6 +217,25 @@ export function BusinessNotificationManager() {
             className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
             placeholder="Endpoint label"
           />
+          <select
+            value={identifierType}
+            onChange={(event) =>
+              setIdentifierType(event.target.value as NotificationEndpointIdentifierType)
+            }
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          >
+            <option value="permanent">Permanent ID</option>
+            <option value="temporary">Temporary ID</option>
+          </select>
+          {identifierType === "temporary" && (
+            <input
+              type="number"
+              value={temporaryDurationDays}
+              onChange={(event) => setTemporaryDurationDays(event.target.value)}
+              placeholder="Valid for days"
+              className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+            />
+          )}
           <button
             type="submit"
             disabled={busy}
@@ -200,8 +256,47 @@ export function BusinessNotificationManager() {
               <p className="text-xs text-muted">
                 Status {row.status} | Sent {row.sentCount} | Spam reports {row.spamReports}
               </p>
+              <p className="text-xs text-muted">
+                ID type {row.identifierType}
+                {row.expiresAt ? ` | Expires ${new Date(row.expiresAt).toLocaleString()}` : ""}
+                {row.disconnectedAt
+                  ? ` | Disconnected ${new Date(row.disconnectedAt).toLocaleString()}`
+                  : ""}
+              </p>
+              <p className="text-xs text-muted">
+                Delivered {row.deliveredCount} | Failed {row.failedCount} | Abuse score {row.abuseScore}
+              </p>
+              {row.blockedUntil && (
+                <p className="text-xs text-danger">Blocked until {new Date(row.blockedUntil).toLocaleString()}</p>
+              )}
               <p className="mt-1 text-xs text-muted">Endpoint ID: {row.id}</p>
               <p className="text-xs text-muted">Secret: {row.endpointSecret}</p>
+              <button
+                type="button"
+                disabled={busy || Boolean(row.disconnectedAt)}
+                onClick={() => void disconnectEndpoint(row.id)}
+                className="mt-2 rounded-xl border border-danger/40 px-3 py-2 text-xs text-danger transition hover:bg-danger/10 disabled:opacity-70"
+              >
+                {row.disconnectedAt ? "Disconnected" : "Disconnect endpoint"}
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Delivery analytics</h2>
+        <div className="mt-3 space-y-2">
+          {!logs.length && <p className="text-sm text-muted">No delivery logs yet.</p>}
+          {logs.slice(0, 50).map((row) => (
+            <article key={row.id} className="rounded-2xl border border-border bg-surface p-3 text-sm">
+              <p className="font-medium">
+                {row.category} | Attempted {row.attempted} | Delivered {row.delivered}
+              </p>
+              <p className="text-xs text-muted">
+                Failed {row.failed} | Window count {row.windowCount} | {row.status}
+              </p>
+              <p className="text-xs text-muted">{new Date(row.createdAt).toLocaleString()}</p>
             </article>
           ))}
         </div>

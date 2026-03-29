@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildReconciliationCsv, buildReconciliationReport } from "@/lib/firebase/repositories";
 import { enforceApiRateLimit, getRequestIdentifier } from "@/lib/api/rate-limit";
+import { AuthApiError, requireAdminOrSecret } from "@/lib/server/auth";
 
 export const runtime = "nodejs";
 
@@ -13,17 +14,11 @@ export async function POST(request: NextRequest) {
       windowMinutes: 10,
     });
 
-    const expectedSecret = process.env.ADMIN_EXPORT_SECRET?.trim();
-    if (!expectedSecret) {
-      return NextResponse.json(
-        { ok: false, error: "ADMIN_EXPORT_SECRET is not configured." },
-        { status: 500 },
-      );
-    }
-    const receivedSecret = String(request.headers.get("x-admin-export-secret") ?? "").trim();
-    if (!receivedSecret || receivedSecret !== expectedSecret) {
-      return NextResponse.json({ ok: false, error: "Unauthorized export secret." }, { status: 401 });
-    }
+    await requireAdminOrSecret(request, {
+      secretHeaderName: "x-admin-export-secret",
+      secretEnvName: "ADMIN_EXPORT_SECRET",
+      unauthorizedError: "Unauthorized export secret.",
+    });
 
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const monthKey = body.monthKey ? String(body.monthKey).trim() : undefined;
@@ -44,6 +39,9 @@ export async function POST(request: NextRequest) {
     const report = await buildReconciliationReport(monthKey);
     return NextResponse.json({ ok: true, report, rateLimit });
   } catch (error) {
+    if (error instanceof AuthApiError) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: error.status });
+    }
     const message = error instanceof Error ? error.message : "Unexpected export API error.";
     const status = message.toLowerCase().includes("rate limit exceeded") ? 429 : 500;
     return NextResponse.json({ ok: false, error: message }, { status });

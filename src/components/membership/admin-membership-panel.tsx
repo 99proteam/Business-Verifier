@@ -3,11 +3,13 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
+  fetchAdminMembershipApiUsage,
   fetchAdminMembershipPrograms,
   fetchMembershipDistributionCycles,
   fetchMembershipEconomicsSettings,
   fetchMembershipReportsByCycle,
   generateMembershipDistributionCycle,
+  MembershipApiUsageBucketRecord,
   MembershipBusinessCycleReportRecord,
   MembershipBusinessProgramRecord,
   MembershipDistributionCycleRecord,
@@ -28,6 +30,7 @@ export function AdminMembershipPanel() {
   const [programs, setPrograms] = useState<MembershipBusinessProgramRecord[]>([]);
   const [cycles, setCycles] = useState<MembershipDistributionCycleRecord[]>([]);
   const [reports, setReports] = useState<MembershipBusinessCycleReportRecord[]>([]);
+  const [usageRows, setUsageRows] = useState<MembershipApiUsageBucketRecord[]>([]);
   const [selectedCycleId, setSelectedCycleId] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -46,14 +49,16 @@ export function AdminMembershipPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [settingsRow, programRows, cycleRows] = await Promise.all([
+      const [settingsRow, programRows, cycleRows, usageBucketRows] = await Promise.all([
         fetchMembershipEconomicsSettings(),
         fetchAdminMembershipPrograms(),
         fetchMembershipDistributionCycles(),
+        fetchAdminMembershipApiUsage(300),
       ]);
       setSettings(settingsRow);
       setPrograms(programRows);
       setCycles(cycleRows);
+      setUsageRows(usageBucketRows);
       const cycleId = selectedCycleId || cycleRows[0]?.id;
       if (cycleId) {
         setSelectedCycleId(cycleId);
@@ -78,14 +83,16 @@ export function AdminMembershipPanel() {
     const activePrograms = programs.filter((row) => row.status === "active");
     const pausedPrograms = programs.filter((row) => row.status === "paused");
     const totalRevenue = cycles.reduce((sum, cycle) => sum + cycle.totalMembershipRevenue, 0);
+    const totalApiCalls = usageRows.reduce((sum, row) => sum + row.count, 0);
     return {
       totalPrograms: programs.length,
       activePrograms: activePrograms.length,
       pausedPrograms: pausedPrograms.length,
       cycleCount: cycles.length,
       totalRevenue,
+      totalApiCalls,
     };
-  }, [cycles, programs]);
+  }, [cycles, programs, usageRows]);
 
   async function saveSettings(event: FormEvent) {
     event.preventDefault();
@@ -199,7 +206,7 @@ export function AdminMembershipPanel() {
         <p className="mt-2 text-sm text-muted">
           Manage verifier membership policy, business participation, and weighted distribution payouts.
         </p>
-        <div className="mt-4 grid gap-3 md:grid-cols-5">
+        <div className="mt-4 grid gap-3 md:grid-cols-6">
           <div className="rounded-2xl border border-border bg-surface p-3">
             <p className="text-xs text-muted">Programs</p>
             <p className="mt-1 text-sm font-medium">{stats.totalPrograms}</p>
@@ -219,6 +226,10 @@ export function AdminMembershipPanel() {
           <div className="rounded-2xl border border-border bg-surface p-3">
             <p className="text-xs text-muted">Membership revenue</p>
             <p className="mt-1 text-sm font-medium">INR {stats.totalRevenue}</p>
+          </div>
+          <div className="rounded-2xl border border-border bg-surface p-3">
+            <p className="text-xs text-muted">API calls tracked</p>
+            <p className="mt-1 text-sm font-medium">{stats.totalApiCalls}</p>
           </div>
         </div>
       </div>
@@ -479,6 +490,23 @@ export function AdminMembershipPanel() {
                 Revenue INR {cycle.totalMembershipRevenue} | Distributed INR {cycle.distributedAmount}
               </p>
             </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Membership API usage monitor</h2>
+        <div className="mt-3 space-y-2">
+          {!usageRows.length && <p className="text-sm text-muted">No API usage buckets yet.</p>}
+          {usageRows.slice(0, 80).map((row) => (
+            <article key={row.id} className="rounded-2xl border border-border bg-surface p-3 text-sm">
+              <p className="font-medium">
+                {row.endpoint} | {row.businessOwnerUid}
+              </p>
+              <p className="text-xs text-muted">
+                Calls {row.count} | Window {new Date(row.windowStart).toLocaleString()} ({row.windowMinutes} min)
+              </p>
+            </article>
           ))}
         </div>
       </section>

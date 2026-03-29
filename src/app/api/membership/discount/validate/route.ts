@@ -8,6 +8,12 @@ import { enforceApiRateLimit, getRequestIdentifier } from "@/lib/api/rate-limit"
 
 export const runtime = "nodejs";
 
+const corsHeaders = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "content-type, x-verifier-api-key",
+};
+
 function asPositiveNumber(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -17,6 +23,13 @@ function getRateLimit() {
   const parsed = Number(process.env.MEMBERSHIP_API_RATE_LIMIT_PER_10_MIN ?? "300");
   if (!Number.isFinite(parsed) || parsed <= 0) return 300;
   return Math.floor(parsed);
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -47,7 +60,7 @@ export async function POST(request: NextRequest) {
           error:
             "Required fields: businessOwnerUid, integrationApiKey (or x-verifier-api-key), customerPublicId, transactionValue.",
         },
-        { status: 400 },
+        { status: 400, headers: corsHeaders },
       );
     }
 
@@ -55,11 +68,14 @@ export async function POST(request: NextRequest) {
     if (!program || program.status !== "active") {
       return NextResponse.json(
         { ok: false, error: "Business membership program is inactive or not configured." },
-        { status: 403 },
+        { status: 403, headers: corsHeaders },
       );
     }
     if (program.integrationApiKey !== integrationApiKey) {
-      return NextResponse.json({ ok: false, error: "Invalid integration API key." }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "Invalid integration API key." },
+        { status: 401, headers: corsHeaders },
+      );
     }
 
     const limit = getRateLimit();
@@ -88,10 +104,10 @@ export async function POST(request: NextRequest) {
       result,
       rateLimit: usage,
       genericRateLimit,
-    });
+    }, { headers: corsHeaders });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected API error.";
     const status = message.toLowerCase().includes("rate limit exceeded") ? 429 : 500;
-    return NextResponse.json({ ok: false, error: message }, { status });
+    return NextResponse.json({ ok: false, error: message }, { status, headers: corsHeaders });
   }
 }

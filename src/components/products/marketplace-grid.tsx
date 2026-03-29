@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Heart } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   fetchPublicDigitalProducts,
@@ -21,7 +21,7 @@ export function MarketplaceGrid() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadProducts() {
+  const loadProducts = useCallback(async () => {
     if (!hasFirebaseConfig) {
       setLoading(false);
       return;
@@ -37,6 +37,8 @@ export function MarketplaceGrid() {
           products.map(async (item) => [item.id, await isProductFavorited(item.id, user.uid)]),
         );
         setFavorites(Object.fromEntries(favoritePairs));
+      } else {
+        setFavorites({});
       }
     } catch (loadError) {
       setError(
@@ -47,11 +49,11 @@ export function MarketplaceGrid() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [hasFirebaseConfig, user]);
 
   useEffect(() => {
     void loadProducts();
-  }, [hasFirebaseConfig, user]);
+  }, [loadProducts]);
 
   async function toggleFavorite(productId: string) {
     if (!user) {
@@ -85,7 +87,7 @@ export function MarketplaceGrid() {
       <div className="glass rounded-3xl p-6">
         <h1 className="text-3xl font-semibold tracking-tight">Digital Marketplace</h1>
         <p className="mt-2 text-sm text-muted">
-          Discover verified business products, mark favorites, and use unique product links.
+          Discover verified business products, compare pricing plans, and use unique product links.
         </p>
       </div>
 
@@ -123,7 +125,13 @@ export function MarketplaceGrid() {
 
             <p className="mt-3 text-sm text-muted">{row.description}</p>
             <p className="mt-3 text-sm">
-              <span className="font-semibold">INR {row.price}</span> • {row.category}
+              <span className="font-semibold">
+                INR {row.pricingPlans[0]?.price ?? row.price}
+              </span>{" "}
+              | {row.category}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              {row.pricingPlans.length} pricing plan(s) available
             </p>
             <p className="mt-1 text-xs text-muted">
               Favorites {row.favoritesCount} | Sales {row.salesCount} | Refunds {row.refundCount}

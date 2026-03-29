@@ -4,8 +4,10 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   adminUpdateEndpointStatus,
+  fetchAdminNotificationDeliveryLogs,
   fetchAdminNotificationEndpoints,
   fetchNotificationApiCharges,
+  NotificationDeliveryLogRecord,
   NotificationEndpointRecord,
   NotificationEndpointStatus,
   updateNotificationApiCharges,
@@ -14,6 +16,7 @@ import {
 export function AdminNotificationPanel() {
   const { user, hasFirebaseConfig } = useAuth();
   const [rows, setRows] = useState<NotificationEndpointRecord[]>([]);
+  const [logs, setLogs] = useState<NotificationDeliveryLogRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +36,9 @@ export function AdminNotificationPanel() {
         fetchAdminNotificationEndpoints(),
         fetchNotificationApiCharges(),
       ]);
+      const deliveryLogs = await fetchAdminNotificationDeliveryLogs();
       setRows(endpoints);
+      setLogs(deliveryLogs);
       setMonthlyBaseFee(String(charges.monthlyBaseFee));
       setPer1000MessagesFee(String(charges.per1000MessagesFee));
     } catch (loadError) {
@@ -173,6 +178,19 @@ export function AdminNotificationPanel() {
               <p className="text-xs text-muted">
                 Status {row.status} | Sent {row.sentCount} | Spam reports {row.spamReports}
               </p>
+              <p className="text-xs text-muted">
+                ID type {row.identifierType}
+                {row.expiresAt ? ` | Expires ${new Date(row.expiresAt).toLocaleString()}` : ""}
+                {row.disconnectedAt
+                  ? ` | Disconnected ${new Date(row.disconnectedAt).toLocaleString()}`
+                  : ""}
+              </p>
+              <p className="text-xs text-muted">
+                Delivered {row.deliveredCount} | Failed {row.failedCount} | Abuse score {row.abuseScore}
+              </p>
+              {row.blockedUntil && (
+                <p className="text-xs text-danger">Blocked until {new Date(row.blockedUntil).toLocaleString()}</p>
+              )}
               <p className="mt-1 text-xs text-muted">Endpoint ID: {row.id}</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
@@ -200,6 +218,24 @@ export function AdminNotificationPanel() {
                   Block endpoint
                 </button>
               </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Delivery logs</h2>
+        <div className="mt-4 space-y-2">
+          {!logs.length && <p className="text-sm text-muted">No logs available.</p>}
+          {logs.slice(0, 80).map((row) => (
+            <article key={row.id} className="rounded-2xl border border-border bg-surface p-3 text-sm">
+              <p className="font-medium">
+                Endpoint {row.endpointId} | {row.category}
+              </p>
+              <p className="text-xs text-muted">
+                Attempted {row.attempted} | Delivered {row.delivered} | Failed {row.failed} | {row.status}
+              </p>
+              <p className="text-xs text-muted">{new Date(row.createdAt).toLocaleString()}</p>
             </article>
           ))}
         </div>

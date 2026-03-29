@@ -1,0 +1,4 @@
+﻿order_id,amount,customer_public_id,date,source,notes
+OFF-1001,1200,BVU-9F2A1Q7B,2026-03-01,offline,Store counter sale
+OFF-1002,850,,2026-03-01,offline,No membership id provided
+ONL-5021,3200,BVU-2KD8M4PX,2026-03-02,online,Website checkout

@@ -1,112 +1,115 @@
-# Business Verifier
+﻿# Business Verifier
 
-Business Verifier is a Next.js + Firebase SaaS platform for online/offline business trust, verification, customer protection, and transparent dispute handling.
+Business Verifier is a Next.js + Firebase trust SaaS platform for online/offline business verification, customer protection, dispute management, membership economics, and transparent public trust signals.
 
 ## Stack
-- Next.js App Router + TypeScript
-- Tailwind CSS
-- Firebase Auth (Google sign-in)
-- Firebase Firestore + Storage (planned persistence)
+- Next.js App Router + TypeScript + Tailwind CSS
+- Firebase Auth, Firestore, Storage
+- Razorpay / RazorpayX (with mock provider fallback)
+- Vercel Cron for automation orchestration
 
-## Current Foundation
-- Modern SaaS landing page
-- Public directory with online/offline tabs
-- Google sign-in page
-- Secure dashboard shell
-- Business verification onboarding form (Firestore save)
-- Ticket creation form with mandatory proof uploads (Storage + Firestore save)
-- Ticket center with message thread, admin escalation, refund/resolve/reopen actions
-- Admin verification queue with certificate issuing
-- Admin ticket queue and per-ticket decision workflow
-- Digital product management, marketplace listing, unique link pages, and favorites
-- Checkout flow, order records, 45-day escrow timeline, refund request with proof, and admin order actions
-- Business sales/refund analytics dashboard for digital products
-- Wallet module: top-up, ledger, withdrawal request, admin approve/decline, and admin add/debit controls
-- Group module: business group creation, join/unjoin, public/admin messaging modes, widget code, and admin group monitoring
-- Notification API module: endpoint creation, targeted sends by public IDs, user notification center, spam marking, and admin endpoint controls
-- Verifier customer membership module: wallet-based monthly/yearly purchase, member identity, and purchase history
-- Business membership module: discount configuration, integration API keys, online/offline transaction ingestion, CSV import, and discount simulation
-- Admin membership economics module: eligibility thresholds, weighted distribution settings, cycle generation, payouts, and business report visibility
-- Product reviews module: proof-backed customer reviews, business responses, and conditional negative review hiding after resolution
-- Follow business module: follow/unfollow from directory and followed-business dashboard
-- Employee module: business employee add/remove by account email and employee assignment dashboard
-- Partnership module: marketplace listings, verified deal chat, agreement workflow, and 2% completion fee settlement
-- Admin identity module: verify/unverify user identities required for partnership chat access
-- Location module: country/city catalog filters in directory and onboarding city suggestions
-- Security module: authenticator MFA enrollment, login challenge, backup codes, and security center
-- Forgot-password recovery flow for email/password accounts (while Gmail remains primary sign-in)
-- Pro deposit module: lock lifecycle, public ledger, withdraw flow, and admin forfeiture controls
-- Trust badge widget: embeddable iframe + public trust profile page
-- Employee performance module: monthly scorecards by business owners and employee-side visibility
-- Admin audit stream: unified immutable log for sensitive actions
-- Automation APIs: cron routes for invoice generation, billing maintenance, due escrow releases, and matured deposit releases
-- Payment integration layer: payment intents (wallet top-up and product checkout), webhook processing, and mock gateway
-- Payout integration layer: payout records and withdrawal payout execution workflow
-- Reconciliation exports: admin JSON/CSV month-wise financial reconciliation endpoints
-- Geo import pipeline: admin API to import global country/city catalog into Firestore
-- Pricing page for customer/business plans
-- Domain models and implementation roadmap
+## Feature Coverage
+- Business onboarding, admin verification queue, certificate issuance
+- Public directory (online/offline tabs), trust profile pages, trust badge widget
+- Pro deposit lock lifecycle and public deposit ledger
+- Ticketing/disputes with proof uploads, escalation, reopen, admin refunds
+- Digital products, unique links, no-refund flags, 45-day escrow
+- Digital product pricing plans (one-time/monthly/yearly) + plan-aware checkout
+- Product favorites with targeted offer broadcast to favorite customers
+- Customer favorites dashboard (`/dashboard/favorites`)
+- Product reviews + proof-of-purchase + business response + conditional hide on resolution
+- Wallet top-up, withdrawal requests, payout logs, admin wallet adjust
+- Country/method withdrawal compliance schema (dynamic input packs)
+- Groups (business-only create, join/unjoin, admin-only/public messaging, widget)
+- Employee moderator controls for groups
+- Notification API (target by user public IDs) + spam handling + delivery logs
+- Notification endpoint lifecycle with permanent/temporary IDs + disconnect control
+- Ads (campaign management, city targeting, impressions/clicks, CTR, CSV exports)
+- Ad tag plans (monthly/yearly + custom plans) configurable by admin
+- Verifier customer membership + business participation + weighted distribution cycles
+- Membership APIs (discount validate, transaction ingest, distribution run)
+- All-platform membership integration kit snippets (Node/Python/PHP/cURL)
+- Admin automation monitor + reconciliation exports (JSON/CSV)
+- Unified audit stream + route-level rate limits
 
-## Setup
-1. Install dependencies:
+## Local Setup
+1. Install dependencies
 ```bash
 npm install
 ```
 
-2. Copy Firebase env template:
+2. Create env file
 ```bash
-cp .env.local.example .env.local
+copy .env.local.example .env.local
 ```
 
-3. Fill `NEXT_PUBLIC_FIREBASE_*` values.
+3. Fill Firebase + secrets in `.env.local`
+- `NEXT_PUBLIC_FIREBASE_*`
+- `NEXT_PUBLIC_ADMIN_EMAILS`, `ADMIN_EMAILS`
+- `FIREBASE_ADMIN_PROJECT_ID`, `FIREBASE_ADMIN_CLIENT_EMAIL`, `FIREBASE_ADMIN_PRIVATE_KEY`
+- payment/payout secrets
+- cron secrets
 
-4. Run:
+4. Run dev server
 ```bash
 npm run dev
 ```
 
-## Membership API Endpoints
-- `POST /api/membership/discount/validate`
-  - Validates verifier customer discount eligibility using `businessOwnerUid`, API key, customer public ID, and transaction value.
-- `POST /api/membership/transactions/ingest`
-  - Ingests one or many online/offline transaction rows for eligibility scoring.
-- `POST /api/membership/distribution/run`
-  - Protected by `x-cron-secret` (`MEMBERSHIP_CRON_SECRET`) for scheduled weighted distribution cycles.
+## Firebase Config Files
+This repo includes:
+- `firebase.json`
+- `firestore.rules`
+- `firestore.indexes.json`
+- `storage.rules`
 
-Environment variables:
-- `MEMBERSHIP_API_RATE_LIMIT_PER_10_MIN`
-- `MEMBERSHIP_INGEST_RATE_LIMIT_PER_10_MIN`
-- `MEMBERSHIP_CRON_SECRET`
-- `AUTOMATION_CRON_SECRET`
+Deploy with Firebase CLI after linking your project:
+```bash
+firebase deploy --only firestore:rules
+firebase deploy --only firestore:indexes
+firebase deploy --only storage
+```
 
-## Automation API Endpoints
-- `POST /api/automation/invoices/run`
-  - Protected by `x-cron-secret` (`AUTOMATION_CRON_SECRET`), generates monthly invoices for businesses.
-- `POST /api/automation/escrow/release/run`
-  - Protected by `x-cron-secret` (`AUTOMATION_CRON_SECRET`), releases due escrow orders in batch.
-- `POST /api/automation/deposits/release/run`
-  - Protected by `x-cron-secret` (`AUTOMATION_CRON_SECRET`), releases matured pro-deposit locks.
-- `POST /api/automation/billing/maintain/run`
-  - Protected by `x-cron-secret` (`AUTOMATION_CRON_SECRET`), marks overdue invoices, applies late fees, and sends reminders.
-- `POST /api/automation/run-all`
-  - Protected by `x-cron-secret` (`AUTOMATION_CRON_SECRET`), runs invoice generation + escrow release + deposit release + billing maintenance in one call.
+Notes:
+- `firestore.rules` and `storage.rules` now authorize admins from `admins/{uid}` docs (`active: true`).
+- Seed an admin document for your admin user UID before production use.
+- `FIREBASE_ADMIN_PRIVATE_KEY` must keep escaped newlines in `.env` (`\\n`).
+- Membership CSV import accepts CSV/TSV/Excel-export text files. Native `.xlsx` direct parsing is not enabled in this build.
 
-## Payments & Payout APIs
+## Scheduler (Vercel Cron)
+- Configured in `vercel.json`
+- Path: `/api/cron/system`
+- Schedule: hourly (`10 * * * *`)
+- Auth accepted by route:
+  - `?token=<CRON_PUBLIC_TRIGGER_TOKEN>` query
+  - `Authorization: Bearer <CRON_PUBLIC_TRIGGER_TOKEN or CRON_SECRET>`
+
+## Important API Routes
 - `POST /api/payments/intents/create`
-  - Creates wallet top-up or product checkout payment intent.
 - `POST /api/payments/intents/confirm`
-  - Confirms payment intent as paid and applies wallet credit or creates escrow order.
 - `POST /api/payments/webhook`
-  - Provider webhook endpoint protected by `x-payment-webhook-secret` (`PAYMENT_WEBHOOK_SECRET`).
+- `POST /api/payouts/withdrawals/review`
 - `POST /api/payouts/withdrawals/execute`
-  - Executes payout for approved withdrawal request.
-
-## Admin Data APIs
+- `POST /api/payouts/webhook`
+- `POST /api/membership/discount/validate`
+- `POST /api/membership/transactions/ingest`
+- `POST /api/membership/distribution/run`
+- `GET /api/membership/sdk`
+- `GET /api/search/global`
+- `GET /api/products/external`
+- `GET /api/ads/click`
+- `GET /api/cron/system`
 - `POST /api/admin/reconciliation/export`
-  - Protected by `x-admin-export-secret` (`ADMIN_EXPORT_SECRET`), returns JSON report or CSV export.
 - `POST /api/admin/geo/import`
-  - Protected by `x-admin-geo-secret` (`ADMIN_GEO_IMPORT_SECRET`), imports country/city catalog seed to Firestore.
 
-## Next Steps
-Implementation sequence is detailed in:
-- `docs/IMPLEMENTATION_ROADMAP.md`
+Auth notes:
+- `POST /api/payments/intents/create` and `POST /api/payments/intents/confirm` require `Authorization: Bearer <Firebase ID token>`.
+- `POST /api/payouts/withdrawals/review` and `POST /api/payouts/withdrawals/execute` require admin bearer token (email in `ADMIN_EMAILS`).
+- `POST /api/admin/reconciliation/export` and `POST /api/admin/geo/import` accept admin bearer token or their existing secret headers.
+- `POST /api/automation/*` endpoints accept admin bearer token or `x-cron-secret` (`AUTOMATION_CRON_SECRET`).
+
+## Membership Offline CSV Template
+- `public/templates/membership-offline-transactions-template.csv`
+
+## Documentation
+- Scope completion checklist: `docs/MASTER_SCOPE_CHECKLIST.md`
+- Delivery roadmap: `docs/IMPLEMENTATION_ROADMAP.md`

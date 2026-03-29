@@ -55,6 +55,12 @@ const cards = [
     icon: Star,
   },
   {
+    title: "Favorite products",
+    body: "View all digital products you marked favorite and open them quickly.",
+    href: "/dashboard/favorites",
+    icon: Star,
+  },
+  {
     title: "Customer membership",
     body: "Buy verifier customer membership and manage your discount identity.",
     href: "/dashboard/membership/customer",

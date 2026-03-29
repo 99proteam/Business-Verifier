@@ -7,7 +7,13 @@ import {
   fetchDigitalProductBySlug,
 } from "@/lib/firebase/repositories";
 
-export function CheckoutView({ slug }: { slug: string }) {
+export function CheckoutView({
+  slug,
+  selectedPlanKey,
+}: {
+  slug: string;
+  selectedPlanKey?: string;
+}) {
   const [product, setProduct] = useState<DigitalProductRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,5 +62,5 @@ export function CheckoutView({ slug }: { slug: string }) {
     );
   }
 
-  return <CheckoutPanel product={product} />;
+  return <CheckoutPanel product={product} initialPlanKey={selectedPlanKey} />;
 }

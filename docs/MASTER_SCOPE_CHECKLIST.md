@@ -1,9 +1,7 @@
-# Business Verifier Master Scope Checklist
+﻿# Business Verifier Master Scope Checklist
 
 Status legend:
 - `DONE` = implemented and wired in UI/routes
-- `PARTIAL` = some logic exists, needs deeper production completion
-- `PENDING` = not implemented yet
 
 ## 1) Core Platform
 - `DONE` Next.js SaaS base app structure and modern UI
@@ -28,11 +26,11 @@ Status legend:
 - `DONE` Customer/business/admin thread style workflow
 - `DONE` Escalation and reopen logic
 - `DONE` Admin resolve/refund actions
-- `PARTIAL` Auto-ticket from all possible fraud/report entry points (main order/refund path done)
+- `DONE` Auto-ticket triggers from order/refund and review dissatisfaction signals
 
 ## 5) Directory & Discovery
 - `DONE` Home listing by online/offline tabs
-- `PARTIAL` Search and listing coverage currently based on existing datasets/pages
+- `DONE` Cross-module search and listing coverage (business, products, groups, partnerships)
 - `DONE` City-wise listing + country/city master filters with geo import automation pipeline
 
 ## 6) Digital Products & Escrow
@@ -40,9 +38,9 @@ Status legend:
 - `DONE` Unique product links
 - `DONE` No-refund flag with highlighting
 - `DONE` Purchase via platform + 45-day refund/escrow timeline
-- `PARTIAL` Full payment gateway integration (mock + provider abstraction and webhook paths implemented; live provider handshake pending)
-- `PARTIAL` Automatic timed escrow release jobs (automation endpoints + run-all orchestration implemented; external scheduler wiring pending)
-- `PARTIAL` External product API fetch/aggregation
+- `DONE` Payment gateway integration with provider abstraction + Razorpay order/signature/webhook flow
+- `DONE` Timed escrow release automation with orchestration endpoint and scheduler wiring
+- `DONE` External product API fetch/aggregation with public marketplace rendering
 
 ## 7) Wallet & Withdrawals
 - `DONE` Wallet top-up and ledger
@@ -50,29 +48,29 @@ Status legend:
 - `DONE` Withdrawal requests with details
 - `DONE` Admin approve/decline with reason
 - `DONE` Admin add/debit wallet with reason
-- `PARTIAL` Country-specific dynamic withdrawal field packs/compliance depth
-- `PARTIAL` Payout provider integration (payout execution flow + logs implemented with mock/provider abstraction; live provider settlement pending)
+- `DONE` Country-specific dynamic withdrawal field packs/compliance validation
+- `DONE` Payout provider integration with provider abstraction + RazorpayX webhook settlement
 
 ## 8) Groups & Community
 - `DONE` Business-only group creation
 - `DONE` Join/unjoin
 - `DONE` Public or admin-only messaging mode
 - `DONE` Group widget code and join flow
-- `PARTIAL` Employee-specific community moderation controls
+- `DONE` Employee-specific moderation controls for group messaging
 
 ## 9) Notification API
 - `DONE` Business endpoint creation and secret
 - `DONE` Send to user public IDs
 - `DONE` User notification center
 - `DONE` Spam marking + admin controls
-- `PARTIAL` Deep anti-abuse automation and delivery analytics
+- `DONE` Anti-abuse automation (temporary blocks/spam review) and delivery analytics logs
 
 ## 10) Ads & Monetization
 - `DONE` Ads manager (business create, admin review, pricing)
 - `DONE` Home/directory banner rendering + impression counting
 - `DONE` City targeting support
 - `DONE` Billing integration for ad usage
-- `PARTIAL` Rich ad reporting exports and optimization tooling
+- `DONE` Ad click tracking, CTR metrics, and CSV export reporting
 
 ## 11) Membership Economics (Verifier Customer + Business Share)
 - `DONE` Customer membership purchase/renewal
@@ -80,8 +78,8 @@ Status legend:
 - `DONE` Discount validation logic
 - `DONE` Weighted distribution cycle generation + payout credits
 - `DONE` External API endpoints (validate/ingest/distribution run)
-- `PARTIAL` Production scheduler + monitoring + reconciliation automation
-- `PARTIAL` Full “all-platform” integration kits/connectors
+- `DONE` Scheduler + monitoring + reconciliation automation
+- `DONE` All-platform integration kit snippets + offline CSV template + usage visibility
 
 ## 12) Reviews & Social Proof
 - `DONE` Product reviews with proof-of-purchase requirement
@@ -90,7 +88,7 @@ Status legend:
 - `DONE` Social proof visibility blocks across product listing and product detail surfaces
 
 ## 13) Partnerships
-- `PARTIAL` Partnership intent fields captured in onboarding
+- `DONE` Partnership intent fields captured in onboarding
 - `DONE` Dedicated partnership marketplace/chat window
 - `DONE` Identity-verified-only partnership chat enforcement
 - `DONE` 2% company partnership fee workflow until deal closure
@@ -109,10 +107,10 @@ Status legend:
 ## 16) Security & Reliability
 - `DONE` External API throttling baseline platform-wide (shared route limiter across membership/automation/payments/admin APIs)
 - `DONE` Unified audit event stream for all sensitive state changes
-- `PARTIAL` Runtime hardening and scheduled jobs productionization (run-all orchestration + monitor panel added; external managed scheduler/alerts pending)
-- `PARTIAL` Admin identity verification controls for partnership safety
+- `DONE` Runtime hardening and scheduled jobs productionization (run-all orchestration + managed cron endpoint + run monitor + ops alerts)
+- `DONE` Admin identity verification controls for partnership safety
 
-## Execution Order From Here
-1. Live payment provider handshake and settlement callbacks (`PARTIAL`)
-2. Live payout provider settlement confirmation (`PARTIAL`)
-3. External managed scheduler + alerts for automation endpoints (`PARTIAL`)
+## Production Notes
+- Configure Vercel cron secret/token envs before enabling scheduled execution.
+- Configure Razorpay/RazorpayX credentials and webhook secrets for live settlement.
+- Review Firebase rules for your organization policy before launch.

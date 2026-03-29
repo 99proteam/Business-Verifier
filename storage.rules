@@ -1,0 +1,48 @@
+﻿rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.active == true;
+    }
+
+    function isSelf(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    match /support-evidence/{uid}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSelf(uid) || isAdmin();
+    }
+
+    match /ticket-messages/{ticketId}/{uid}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSelf(uid) || isAdmin();
+    }
+
+    match /reviews/{productId}/{uid}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSelf(uid) || isAdmin();
+    }
+
+    match /order-refunds/{orderId}/{uid}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSelf(uid) || isAdmin();
+    }
+
+    match /ads/{uid}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSelf(uid) || isAdmin();
+    }
+
+    match /{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

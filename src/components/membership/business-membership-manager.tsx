@@ -5,10 +5,12 @@ import { useAuth } from "@/components/providers/auth-provider";
 import {
   bulkCreateMembershipBusinessTransactions,
   createMembershipBusinessTransaction,
+  fetchMembershipApiUsageByBusiness,
   fetchMembershipBusinessProgram,
   fetchMembershipEconomicsSettings,
   fetchMembershipReportsByBusiness,
   fetchMembershipTransactionsByBusiness,
+  MembershipApiUsageBucketRecord,
   MembershipBusinessCycleReportRecord,
   MembershipBusinessProgramRecord,
   MembershipBusinessTransactionRecord,
@@ -23,24 +25,29 @@ function currentMonthKey() {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-function parseCsvRows(csvText: string) {
-  const rows = csvText
+function parseDelimitedRows(rawText: string) {
+  const rows = rawText
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
   if (rows.length <= 1) return [];
   const [headerRow, ...dataRows] = rows;
-  const headers = headerRow.split(",").map((item) => item.trim().toLowerCase());
+  const separator = headerRow.includes("\t")
+    ? "\t"
+    : headerRow.includes(";")
+      ? ";"
+      : ",";
+  const headers = headerRow.split(separator).map((item) => item.trim().toLowerCase());
   const idxOrderId = headers.indexOf("order_id");
   const idxAmount = headers.indexOf("amount");
   const idxPublicId = headers.indexOf("customer_public_id");
   const idxDate = headers.indexOf("date");
   if (idxOrderId === -1 || idxAmount === -1) {
-    throw new Error("CSV must include `order_id,amount` columns.");
+    throw new Error("Sheet must include `order_id,amount` columns.");
   }
 
   return dataRows.map((line) => {
-    const cols = line.split(",").map((item) => item.trim());
+    const cols = line.split(separator).map((item) => item.trim());
     return {
       externalOrderId: cols[idxOrderId] ?? "",
       transactionValue: Number(cols[idxAmount] ?? 0),
@@ -52,9 +59,11 @@ function parseCsvRows(csvText: string) {
 
 export function BusinessMembershipManager() {
   const { user, hasFirebaseConfig } = useAuth();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const [program, setProgram] = useState<MembershipBusinessProgramRecord | null>(null);
   const [transactions, setTransactions] = useState<MembershipBusinessTransactionRecord[]>([]);
   const [reports, setReports] = useState<MembershipBusinessCycleReportRecord[]>([]);
+  const [usageRows, setUsageRows] = useState<MembershipApiUsageBucketRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,16 +98,18 @@ export function BusinessMembershipManager() {
     setLoading(true);
     setError(null);
     try {
-      const [programRow, settingRow, txRows, reportRows] = await Promise.all([
+      const [programRow, settingRow, txRows, reportRows, usageBucketRows] = await Promise.all([
         fetchMembershipBusinessProgram(user.uid),
         fetchMembershipEconomicsSettings(),
         fetchMembershipTransactionsByBusiness(user.uid, monthKey),
         fetchMembershipReportsByBusiness(user.uid),
+        fetchMembershipApiUsageByBusiness(user.uid, 180),
       ]);
       setProgram(programRow);
       setMinimumDiscountPercent(settingRow.minimumDiscountPercent);
       setTransactions(txRows);
       setReports(reportRows);
+      setUsageRows(usageBucketRows);
       if (programRow) {
         setBusinessMode(programRow.businessMode);
         setDiscountPercent(String(programRow.discountPercent));
@@ -128,6 +139,35 @@ export function BusinessMembershipManager() {
       eligibleGross: eligible.reduce((sum, row) => sum + row.transactionValue, 0),
     };
   }, [transactions]);
+
+  const integrationKit = useMemo(() => {
+    const ownerUid = program?.ownerUid ?? "BUSINESS_OWNER_UID";
+    const apiKey = program?.integrationApiKey ?? "YOUR_INTEGRATION_API_KEY";
+    const source = businessMode === "offline" ? "offline" : "online";
+    const discountValidateUrl = `${appUrl}/api/membership/discount/validate`;
+    const transactionIngestUrl = `${appUrl}/api/membership/transactions/ingest`;
+    const sdkUrl = `${appUrl}/api/membership/sdk`;
+    return {
+      nodeSnippet: `// Node.js / Next.js server-side integration\nconst response = await fetch(\"${discountValidateUrl}\", {\n  method: \"POST\",\n  headers: {\n    \"content-type\": \"application/json\",\n    \"x-verifier-api-key\": \"${apiKey}\"\n  },\n  body: JSON.stringify({\n    businessOwnerUid: \"${ownerUid}\",\n    customerPublicId: \"BVU-XXXXXXX\",\n    transactionValue: 1500,\n    source: \"${source}\",\n    externalOrderId: \"ORD-1001\"\n  })\n});\nconst data = await response.json();`,
+      pythonSnippet: `# Python requests integration\nimport requests\n\nres = requests.post(\n    \"${discountValidateUrl}\",\n    headers={\"x-verifier-api-key\": \"${apiKey}\"},\n    json={\n        \"businessOwnerUid\": \"${ownerUid}\",\n        \"customerPublicId\": \"BVU-XXXXXXX\",\n        \"transactionValue\": 1500,\n        \"source\": \"${source}\",\n        \"externalOrderId\": \"ORD-1001\"\n    },\n    timeout=15,\n)\nprint(res.json())`,
+      phpSnippet: `<?php\n$payload = [\n  \"businessOwnerUid\" => \"${ownerUid}\",\n  \"customerPublicId\" => \"BVU-XXXXXXX\",\n  \"transactionValue\" => 1500,\n  \"source\" => \"${source}\",\n  \"externalOrderId\" => \"ORD-1001\"\n];\n$ch = curl_init(\"${discountValidateUrl}\");\ncurl_setopt($ch, CURLOPT_HTTPHEADER, [\n  \"Content-Type: application/json\",\n  \"x-verifier-api-key: ${apiKey}\"\n]);\ncurl_setopt($ch, CURLOPT_POST, true);\ncurl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n$response = curl_exec($ch);\ncurl_close($ch);\necho $response;\n?>`,
+      ingestCurl: `curl -X POST \"${transactionIngestUrl}\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"x-verifier-api-key: ${apiKey}\" \\\n  -d '{\n    \"businessOwnerUid\": \"${ownerUid}\",\n    \"source\": \"${source}\",\n    \"rows\": [\n      {\"externalOrderId\": \"ORD-1001\", \"transactionValue\": 1500, \"customerPublicId\": \"BVU-XXXXXXX\"},\n      {\"externalOrderId\": \"ORD-1002\", \"transactionValue\": 700}\n    ]\n  }'`,
+      browserSnippet: `<!-- Browser integration SDK -->\n<script src=\"${sdkUrl}\"></script>\n<div id=\"bv-coupon-box\"></div>\n<script>\n  window.BusinessVerifierSDK.mountCouponPrompt({\n    containerId: \"bv-coupon-box\",\n    businessOwnerUid: \"${ownerUid}\",\n    integrationApiKey: \"${apiKey}\",\n    source: \"${source}\",\n    transactionValue: 1500,\n    externalOrderId: \"ORD-1001\",\n    onResult: function (result) {\n      console.log(\"Verifier discount result\", result);\n      // Apply result.discountPercent or result.finalAmount in your checkout.\n    }\n  });\n</script>`,
+    };
+  }, [appUrl, businessMode, program]);
+
+  const usageSummary = useMemo(() => {
+    const aggregate = new Map<
+      MembershipApiUsageBucketRecord["endpoint"],
+      { endpoint: MembershipApiUsageBucketRecord["endpoint"]; calls: number }
+    >();
+    for (const row of usageRows) {
+      const current = aggregate.get(row.endpoint) ?? { endpoint: row.endpoint, calls: 0 };
+      current.calls += row.count;
+      aggregate.set(row.endpoint, current);
+    }
+    return Array.from(aggregate.values()).sort((a, b) => b.calls - a.calls);
+  }, [usageRows]);
 
   async function saveProgram(event: FormEvent) {
     event.preventDefault();
@@ -208,7 +248,7 @@ export function BusinessMembershipManager() {
     setError(null);
     setInfo(null);
     try {
-      const rows = parseCsvRows(csvText).filter((row) => row.externalOrderId && row.transactionValue > 0);
+      const rows = parseDelimitedRows(csvText).filter((row) => row.externalOrderId && row.transactionValue > 0);
       const result = await bulkCreateMembershipBusinessTransactions({
         businessOwnerUid: user.uid,
         source: csvSource,
@@ -230,6 +270,13 @@ export function BusinessMembershipManager() {
   async function onCsvFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".xlsx")) {
+      setError(
+        "Direct .xlsx parsing is not enabled in this build yet. Export as CSV/TSV from Excel and re-upload.",
+      );
+      return;
+    }
     const text = await file.text();
     setCsvText(text);
   }
@@ -369,6 +416,85 @@ export function BusinessMembershipManager() {
         )}
       </form>
 
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">All-platform integration kit</h2>
+        <p className="mt-1 text-xs text-muted">
+          Use these ready snippets in your website/backend to validate membership discounts and ingest transactions.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <a
+            href="/templates/membership-offline-transactions-template.csv"
+            className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
+            download
+          >
+            Download offline CSV template
+          </a>
+          <a
+            href={`${appUrl}/api/membership/discount/validate`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
+          >
+            Open discount validation endpoint
+          </a>
+          <a
+            href={`${appUrl}/api/membership/sdk`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
+          >
+            Open browser SDK endpoint
+          </a>
+        </div>
+        <div className="mt-4 space-y-3">
+          <div>
+            <p className="text-xs font-medium text-muted">Node.js / Next.js server</p>
+            <textarea
+              readOnly
+              rows={13}
+              value={integrationKit.nodeSnippet}
+              className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 font-mono text-xs outline-none"
+            />
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted">Python backend</p>
+            <textarea
+              readOnly
+              rows={12}
+              value={integrationKit.pythonSnippet}
+              className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 font-mono text-xs outline-none"
+            />
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted">PHP backend</p>
+            <textarea
+              readOnly
+              rows={16}
+              value={integrationKit.phpSnippet}
+              className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 font-mono text-xs outline-none"
+            />
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted">Bulk ingest (cURL)</p>
+            <textarea
+              readOnly
+              rows={12}
+              value={integrationKit.ingestCurl}
+              className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 font-mono text-xs outline-none"
+            />
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted">Browser SDK embed</p>
+            <textarea
+              readOnly
+              rows={16}
+              value={integrationKit.browserSnippet}
+              className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 font-mono text-xs outline-none"
+            />
+          </div>
+        </div>
+      </section>
+
       <form onSubmit={addTransaction} className="glass rounded-3xl p-6">
         <h2 className="text-lg font-semibold tracking-tight">Add transaction</h2>
         <p className="mt-1 text-xs text-muted">
@@ -419,9 +545,11 @@ export function BusinessMembershipManager() {
       </form>
 
       <section className="glass rounded-3xl p-6">
-        <h2 className="text-lg font-semibold tracking-tight">Offline CSV import</h2>
+        <h2 className="text-lg font-semibold tracking-tight">Offline CSV/Excel import</h2>
         <p className="mt-1 text-xs text-muted">
-          CSV format: <span className="font-mono">order_id,amount,customer_public_id,date</span>
+          Use CSV/TSV exported from Excel. Required columns:
+          {" "}
+          <span className="font-mono">order_id,amount,customer_public_id,date</span>
         </p>
         <div className="mt-3 grid gap-3">
           <select
@@ -434,7 +562,7 @@ export function BusinessMembershipManager() {
           </select>
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.tsv,.txt,.xls,.xlsx,text/csv,text/tab-separated-values"
             onChange={(event) => void onCsvFileChange(event)}
             className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none file:mr-3 file:rounded-lg file:border-0 file:bg-brand/10 file:px-3 file:py-1 file:text-xs file:font-medium file:text-brand-strong"
           />
@@ -542,6 +670,33 @@ export function BusinessMembershipManager() {
               {!!report.missedReasons.length && (
                 <p className="mt-1 text-xs text-muted">Notes: {report.missedReasons.join(" ")}</p>
               )}
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">API usage analytics</h2>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          {usageSummary.map((row) => (
+            <div key={row.endpoint} className="rounded-2xl border border-border bg-surface p-3">
+              <p className="text-xs text-muted">{row.endpoint}</p>
+              <p className="mt-1 text-sm font-medium">{row.calls} calls</p>
+            </div>
+          ))}
+          {!usageSummary.length && (
+            <p className="text-sm text-muted md:col-span-3">No API usage buckets yet.</p>
+          )}
+        </div>
+        <div className="mt-4 space-y-2">
+          {usageRows.slice(0, 20).map((row) => (
+            <article key={row.id} className="rounded-2xl border border-border bg-surface p-3 text-sm">
+              <p className="font-medium">
+                {row.endpoint} | {row.count} calls
+              </p>
+              <p className="text-xs text-muted">
+                Window {new Date(row.windowStart).toLocaleString()} ({row.windowMinutes} min)
+              </p>
             </article>
           ))}
         </div>

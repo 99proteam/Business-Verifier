@@ -4,8 +4,6 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   adminAdjustWalletBalance,
-  adminReviewWithdrawalRequest,
-  executePayoutForWithdrawalRequest,
   fetchAdminPayouts,
   fetchAdminWithdrawalRequests,
   fetchWithdrawalSettings,
@@ -133,12 +131,24 @@ export function AdminWalletPanel() {
     setError(null);
     setInfo(null);
     try {
-      await adminReviewWithdrawalRequest({
-        adminUid: user.uid,
-        requestId,
-        action,
-        note,
+      const idToken = await user.getIdToken();
+      const response = await fetch("/api/payouts/withdrawals/review", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          adminUid: user.uid,
+          requestId,
+          action,
+          note,
+        }),
       });
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (!response.ok || !payload.ok) {
+        throw new Error(String(payload.error ?? "Unable to review request."));
+      }
       setInfo(`Withdrawal request ${action}d.`);
       await load();
     } catch (reviewError) {
@@ -158,10 +168,22 @@ export function AdminWalletPanel() {
     setError(null);
     setInfo(null);
     try {
-      await executePayoutForWithdrawalRequest({
-        requestId,
-        adminUid: user.uid,
+      const idToken = await user.getIdToken();
+      const response = await fetch("/api/payouts/withdrawals/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          requestId,
+          adminUid: user.uid,
+        }),
       });
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (!response.ok || !payload.ok) {
+        throw new Error(String(payload.error ?? "Unable to execute payout."));
+      }
       setInfo("Payout execution triggered.");
       await load();
     } catch (payoutError) {

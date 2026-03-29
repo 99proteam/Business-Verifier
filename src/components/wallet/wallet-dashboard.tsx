@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   createWithdrawalRequest,
+  fetchWithdrawalComplianceSchema,
   fetchPaymentIntentsByOwner,
   fetchWallet,
   fetchWalletTransactions,
@@ -11,6 +12,7 @@ import {
   fetchWithdrawalSettings,
   topUpWallet,
   PaymentIntentRecord,
+  WithdrawalComplianceSchema,
   WalletRecord,
   WalletTransactionRecord,
   WithdrawalRequestRecord,
@@ -30,13 +32,10 @@ export function WalletDashboard() {
   const [withdrawAmount, setWithdrawAmount] = useState("1000");
   const [country, setCountry] = useState("India");
   const [method, setMethod] = useState("Bank Transfer");
-  const [accountName, setAccountName] = useState("");
-  const [accountNumber, setAccountNumber] = useState("");
-  const [ifsc, setIfsc] = useState("");
-  const [iban, setIban] = useState("");
-  const [swift, setSwift] = useState("");
-  const [upi, setUpi] = useState("");
-  const [paypal, setPaypal] = useState("");
+  const [schema, setSchema] = useState<WithdrawalComplianceSchema>(() =>
+    fetchWithdrawalComplianceSchema("India"),
+  );
+  const [accountDetails, setAccountDetails] = useState<Record<string, string>>({});
   const [withdrawFeePercent, setWithdrawFeePercent] = useState(2);
   const [withdrawFlatFee, setWithdrawFlatFee] = useState(10);
 
@@ -75,6 +74,14 @@ export function WalletDashboard() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const nextSchema = fetchWithdrawalComplianceSchema(country);
+    setSchema(nextSchema);
+    if (!nextSchema.methods.includes(method)) {
+      setMethod(nextSchema.methods[0] ?? "Bank Transfer");
+    }
+  }, [country, method]);
+
   async function handleTopup() {
     if (!user) return;
     const amount = Number(topupAmount);
@@ -112,10 +119,12 @@ export function WalletDashboard() {
     setError(null);
     setInfo(null);
     try {
+      const idToken = await user.getIdToken();
       const response = await fetch("/api/payments/intents/create", {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          authorization: `Bearer ${idToken}`,
         },
         body: JSON.stringify({
           purpose: "wallet_topup",
@@ -156,14 +165,11 @@ export function WalletDashboard() {
       return;
     }
 
-    const details: Record<string, string> = {};
-    if (accountName.trim()) details.accountName = accountName.trim();
-    if (accountNumber.trim()) details.accountNumber = accountNumber.trim();
-    if (ifsc.trim()) details.ifsc = ifsc.trim();
-    if (iban.trim()) details.iban = iban.trim();
-    if (swift.trim()) details.swift = swift.trim();
-    if (upi.trim()) details.upi = upi.trim();
-    if (paypal.trim()) details.paypal = paypal.trim();
+    const details = Object.fromEntries(
+      Object.entries(accountDetails)
+        .map(([key, value]) => [key, value.trim()])
+        .filter(([, value]) => Boolean(value)),
+    );
 
     setBusy(true);
     setError(null);
@@ -179,6 +185,7 @@ export function WalletDashboard() {
         accountDetails: details,
       });
       setInfo(`Withdrawal request created: ${requestId}`);
+      setAccountDetails({});
       await load();
     } catch (withdrawError) {
       setError(
@@ -288,54 +295,28 @@ export function WalletDashboard() {
             placeholder="Country"
             className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
           />
-          <input
+          <select
             value={method}
             onChange={(event) => setMethod(event.target.value)}
-            placeholder="Method (Bank / UPI / PayPal)"
             className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-          />
-          <input
-            value={accountName}
-            onChange={(event) => setAccountName(event.target.value)}
-            placeholder="Account Holder Name"
-            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-          />
-          <input
-            value={accountNumber}
-            onChange={(event) => setAccountNumber(event.target.value)}
-            placeholder="Account Number"
-            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-          />
-          <input
-            value={ifsc}
-            onChange={(event) => setIfsc(event.target.value)}
-            placeholder="IFSC"
-            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-          />
-          <input
-            value={iban}
-            onChange={(event) => setIban(event.target.value)}
-            placeholder="IBAN"
-            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-          />
-          <input
-            value={swift}
-            onChange={(event) => setSwift(event.target.value)}
-            placeholder="SWIFT"
-            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-          />
-          <input
-            value={upi}
-            onChange={(event) => setUpi(event.target.value)}
-            placeholder="UPI ID"
-            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-          />
-          <input
-            value={paypal}
-            onChange={(event) => setPaypal(event.target.value)}
-            placeholder="PayPal Email"
-            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-          />
+          >
+            {schema.methods.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+          {(schema.fieldsByMethod[method] ?? []).map((field) => (
+            <input
+              key={field.key}
+              value={accountDetails[field.key] ?? ""}
+              onChange={(event) =>
+                setAccountDetails((prev) => ({ ...prev, [field.key]: event.target.value }))
+              }
+              placeholder={`${field.label}${field.required ? " *" : ""}`}
+              className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+            />
+          ))}
         </div>
         <button
           type="submit"

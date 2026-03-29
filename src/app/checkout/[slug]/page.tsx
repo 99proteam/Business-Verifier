@@ -4,10 +4,13 @@ import { CheckoutView } from "@/components/orders/checkout-view";
 
 export default async function CheckoutPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<{ plan?: string }>;
 }) {
   const { slug } = await params;
+  const { plan } = await searchParams;
 
   return (
     <div>
@@ -19,7 +22,7 @@ export default async function CheckoutPage({
         >
           Back to product
         </Link>
-        <CheckoutView slug={slug} />
+        <CheckoutView slug={slug} selectedPlanKey={plan} />
       </main>
     </div>
   );

@@ -1,0 +1,62 @@
+﻿rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
+    }
+
+    function isSelf(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function hasUserOwnership(data) {
+      return (
+        (data.ownerUid is string && data.ownerUid == request.auth.uid) ||
+        (data.userUid is string && data.userUid == request.auth.uid) ||
+        (data.customerUid is string && data.customerUid == request.auth.uid) ||
+        (data.employeeUid is string && data.employeeUid == request.auth.uid) ||
+        (data.followerUid is string && data.followerUid == request.auth.uid) ||
+        (data.addedByUid is string && data.addedByUid == request.auth.uid) ||
+        (data.senderUid is string && data.senderUid == request.auth.uid) ||
+        (data.actorUid is string && data.actorUid == request.auth.uid) ||
+        (data.businessOwnerUid is string && data.businessOwnerUid == request.auth.uid) ||
+        (data.initiatorUid is string && data.initiatorUid == request.auth.uid) ||
+        (data.targetUid is string && data.targetUid == request.auth.uid) ||
+        (data.participantUids is list && request.auth.uid in data.participantUids)
+      );
+    }
+
+    function ownsRecord() {
+      return (
+        (request.resource != null && hasUserOwnership(request.resource.data)) ||
+        (resource != null && hasUserOwnership(resource.data))
+      );
+    }
+
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isSelf(userId) || isAdmin();
+    }
+
+    match /users/{userId}/{document=**} {
+      allow read: if true;
+      allow write: if isSelf(userId) || isAdmin();
+    }
+
+    match /digitalProducts/{productId}/favorites/{userId} {
+      allow read: if true;
+      allow write: if isSelf(userId) || isAdmin();
+    }
+
+    match /{document=**} {
+      allow read: if true;
+      allow write: if isAdmin() || ownsRecord();
+    }
+  }
+}

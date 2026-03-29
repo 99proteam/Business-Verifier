@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import {
   AdCampaignRecord,
@@ -65,17 +66,21 @@ export function PublicAdBanner({ placement, city, className }: PublicAdBannerPro
       }`}
     >
       <a
-        href={ad.destinationUrl}
+        href={`/api/ads/click?campaignId=${encodeURIComponent(ad.id)}&to=${encodeURIComponent(
+          ad.destinationUrl,
+        )}`}
         target="_blank"
         rel="noreferrer"
         className="block transition hover:opacity-95"
       >
         <div className="relative h-48 w-full overflow-hidden bg-surface">
-          <img
+          <Image
             src={ad.imageUrl}
             alt={ad.title}
+            fill
+            sizes="(max-width: 768px) 100vw, 768px"
             className="h-full w-full object-cover"
-            loading="lazy"
+            unoptimized
           />
         </div>
         <div className="space-y-2 p-4">

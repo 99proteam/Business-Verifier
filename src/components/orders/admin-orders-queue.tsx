@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   adminApproveOrderRefund,
@@ -18,7 +18,7 @@ export function AdminOrdersQueue() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  async function loadOrders() {
+  const loadOrders = useCallback(async () => {
     if (!hasFirebaseConfig) {
       setLoading(false);
       return;
@@ -37,11 +37,11 @@ export function AdminOrdersQueue() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [hasFirebaseConfig]);
 
   useEffect(() => {
     void loadOrders();
-  }, [hasFirebaseConfig]);
+  }, [loadOrders]);
 
   async function approveRefund(orderId: string) {
     if (!user) return;

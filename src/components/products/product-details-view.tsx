@@ -57,7 +57,7 @@ export function ProductDetailsView({ slug }: { slug: string }) {
             <h1 className="text-3xl font-semibold tracking-tight">{row.title}</h1>
             <p className="mt-2 text-sm text-muted">by {row.ownerName}</p>
             <p className="mt-4 text-sm text-muted">{row.description}</p>
-            <p className="mt-4 text-lg font-semibold">INR {row.price}</p>
+            <p className="mt-4 text-lg font-semibold">Starting at INR {row.pricingPlans[0]?.price ?? row.price}</p>
             <p className="mt-1 text-sm text-muted">
               Category {row.category} | Favorites {row.favoritesCount}
             </p>
@@ -76,16 +76,24 @@ export function ProductDetailsView({ slug }: { slug: string }) {
                 No Refund Product
               </p>
             )}
-            <Link
-              href={`/checkout/${row.uniqueLinkSlug}`}
-              className="mt-6 inline-flex rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-strong"
-            >
-              Purchase with escrow
-            </Link>
+            <div className="mt-5 space-y-2">
+              <p className="text-xs text-muted">Pricing plans</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {row.pricingPlans.map((plan) => (
+                  <Link
+                    key={plan.key}
+                    href={`/checkout/${row.uniqueLinkSlug}?plan=${encodeURIComponent(plan.key)}`}
+                    className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
+                  >
+                    {plan.name} | {plan.billingCycle.replace("_", " ")} | INR {plan.price}
+                  </Link>
+                ))}
+              </div>
+            </div>
             {row.ownerBusinessSlug && (
               <Link
                 href={`/business/${row.ownerBusinessSlug}`}
-                className="mt-3 inline-flex rounded-xl border border-border px-4 py-2 text-sm transition hover:border-brand/40"
+                className="mt-4 inline-flex rounded-xl border border-border px-4 py-2 text-sm transition hover:border-brand/40"
               >
                 View business trust profile
               </Link>

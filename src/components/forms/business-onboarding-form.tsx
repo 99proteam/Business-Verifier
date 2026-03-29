@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { useAuth } from "@/components/providers/auth-provider";
+import { uploadEvidenceFiles } from "@/lib/firebase/storage";
 import {
   createBusinessApplication,
   fetchGeoCatalogCitiesByCountry,
@@ -102,6 +103,7 @@ export function BusinessOnboardingForm() {
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [applicationId, setApplicationId] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<BusinessInput | null>(null);
+  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
   const [countryCities, setCountryCities] = useState<string[]>([]);
   const {
@@ -184,12 +186,26 @@ export function BusinessOnboardingForm() {
       setSubmissionError("Firebase config missing. Add NEXT_PUBLIC_FIREBASE_* values.");
       return;
     }
+    if (!documentFiles.length) {
+      setSubmissionError(
+        "Upload at least one public verification document to submit application.",
+      );
+      return;
+    }
 
     setSubmissionError(null);
     try {
-      const id = await createBusinessApplication(user.uid, data);
+      const publicDocumentUrls = await uploadEvidenceFiles(
+        `business-verification/${user.uid}`,
+        documentFiles,
+      );
+      const id = await createBusinessApplication(user.uid, {
+        ...data,
+        publicDocumentUrls,
+      });
       setApplicationId(id);
       setSubmitted(data);
+      setDocumentFiles([]);
     } catch (error) {
       setSubmissionError(
         error instanceof Error ? error.message : "Unable to save application right now.",
@@ -337,6 +353,21 @@ export function BusinessOnboardingForm() {
               <p className="text-xs text-danger">{errors.publicDocumentsSummary.message}</p>
             )}
           </label>
+
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm">Upload public verification documents</span>
+            <input
+              type="file"
+              multiple
+              onChange={(event) => setDocumentFiles(Array.from(event.target.files ?? []))}
+              className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none file:mr-3 file:rounded-lg file:border-0 file:bg-brand/10 file:px-3 file:py-1 file:text-xs file:font-medium file:text-brand-strong"
+            />
+            <p className="text-xs text-muted">
+              {documentFiles.length
+                ? `${documentFiles.length} document file(s) selected`
+                : "Required: upload business documents that can be shown publicly."}
+            </p>
+          </label>
         </div>
 
         <div className="mt-6 space-y-4 rounded-2xl border border-border bg-surface p-4">
@@ -411,7 +442,7 @@ export function BusinessOnboardingForm() {
       {submitted && (
         <div className="rounded-2xl border border-brand/35 bg-brand/10 p-4 text-sm">
           Application submitted for <b>{submitted.businessName}</b>. Tracking ID:{" "}
-          <b>{applicationId}</b>. Admin can now review and issue certificate.
+          <b>{applicationId}</b>. Admin can now review checklist and issue certificate.
         </div>
       )}
     </div>

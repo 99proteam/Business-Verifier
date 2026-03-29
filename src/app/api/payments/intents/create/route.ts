@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  attachPaymentIntentGatewayData,
   createProductCheckoutPaymentIntent,
   createWalletTopupPaymentIntent,
   fetchPaymentIntentById,
 } from "@/lib/firebase/repositories";
 import { enforceApiRateLimit, getRequestIdentifier } from "@/lib/api/rate-limit";
+import { AuthApiError, requireOwnerAuth } from "@/lib/server/auth";
+import { createRazorpayOrder } from "@/lib/server/payments/razorpay";
 
 export const runtime = "nodejs";
 
@@ -28,6 +31,13 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    const auth = await requireOwnerAuth(request, ownerUid);
+    if (!auth.isAdmin && auth.email && auth.email.toLowerCase() !== ownerEmail.toLowerCase()) {
+      return NextResponse.json(
+        { ok: false, error: "ownerEmail must match authenticated user email." },
+        { status: 403 },
+      );
+    }
 
     let intentId = "";
     if (purpose === "wallet_topup") {
@@ -46,6 +56,9 @@ export async function POST(request: NextRequest) {
       });
     } else {
       const productSlug = String(body.productSlug ?? "").trim();
+      const pricingPlanKey = body.pricingPlanKey
+        ? String(body.pricingPlanKey).trim()
+        : undefined;
       if (!productSlug) {
         return NextResponse.json(
           { ok: false, error: "Product checkout requires productSlug." },
@@ -57,16 +70,50 @@ export async function POST(request: NextRequest) {
         ownerName,
         ownerEmail,
         productSlug,
+        pricingPlanKey,
       });
     }
 
-    const intent = await fetchPaymentIntentById(intentId);
+    let intent = await fetchPaymentIntentById(intentId);
+    if (intent?.provider === "razorpay" && !intent.providerOrderId) {
+      const order = await createRazorpayOrder({
+        amountInPaise: Math.round(intent.amount * 100),
+        currency: intent.currency,
+        receipt: `bv_${intent.id.slice(0, 22)}`,
+        notes: {
+          intentId: intent.id,
+          ownerUid: intent.ownerUid,
+          purpose: intent.purpose,
+        },
+      });
+      await attachPaymentIntentGatewayData({
+        intentId: intent.id,
+        providerOrderId: order.id,
+        paymentUrl: `${process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000"}/payments/razorpay/${intent.id}`,
+        metadata: {
+          razorpayOrderStatus: order.status,
+          razorpayAmount: String(order.amount),
+        },
+      });
+      intent = await fetchPaymentIntentById(intent.id);
+    }
     return NextResponse.json({
       ok: true,
       intent,
+      gateway: intent?.provider === "razorpay"
+        ? {
+            provider: "razorpay",
+            keyId: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID?.trim() || process.env.RAZORPAY_KEY_ID?.trim() || "",
+          }
+        : {
+            provider: "mock",
+          },
       rateLimit,
     });
   } catch (error) {
+    if (error instanceof AuthApiError) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: error.status });
+    }
     const message = error instanceof Error ? error.message : "Unexpected payment API error.";
     const status = message.toLowerCase().includes("rate limit exceeded") ? 429 : 500;
     return NextResponse.json({ ok: false, error: message }, { status });

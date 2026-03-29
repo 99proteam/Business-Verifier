@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   BusinessApplicationRecord,
@@ -148,6 +149,54 @@ export function PublicBusinessProfile({ slug }: { slug: string }) {
               {entry.note && <p className="mt-1 text-xs text-muted">{entry.note}</p>}
             </article>
           ))}
+        </div>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Verification transparency</h2>
+        <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+          <p>
+            Mobile:{" "}
+            <b>{business.verificationChecklist.mobileVerified ? "Verified" : "Pending"}</b>
+          </p>
+          <p>
+            Address:{" "}
+            <b>{business.verificationChecklist.addressVerified ? "Verified" : "Pending"}</b>
+          </p>
+          <p>
+            Bank account:{" "}
+            <b>{business.verificationChecklist.bankAccountVerified ? "Verified" : "Pending"}</b>
+          </p>
+          <p>
+            Business info:{" "}
+            <b>{business.verificationChecklist.businessInfoVerified ? "Verified" : "Pending"}</b>
+          </p>
+          <p className="sm:col-span-2">
+            Public documents:{" "}
+            <b>
+              {business.verificationChecklist.publicDocumentsVerified
+                ? "Verified"
+                : "Pending"}
+            </b>
+          </p>
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          {business.publicDocumentsSummary || "No public document summary available."}
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {(business.publicDocumentUrls ?? []).map((url, index) => (
+            <Link
+              key={`${business.id}_public_doc_${index}`}
+              href={url}
+              target="_blank"
+              className="rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
+            >
+              Public document {index + 1}
+            </Link>
+          ))}
+          {!business.publicDocumentUrls?.length && (
+            <span className="text-xs text-muted">No public document files published yet.</span>
+          )}
         </div>
       </section>
     </div>
