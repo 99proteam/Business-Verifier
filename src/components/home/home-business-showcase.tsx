@@ -4,12 +4,36 @@ import Image from "next/image";
 import Link from "next/link";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
-  fetchHomePageShowcase,
   HomeMediaItemRecord,
-  HomePageSettingsRecord,
 } from "@/lib/firebase/repositories";
 
-type HomeShowcaseData = Awaited<ReturnType<typeof fetchHomePageShowcase>>;
+export type HomeShowcaseData = {
+  settings: {
+    businessMode: "new" | "recommended" | "both";
+    businessLimit: number;
+    newBusinessWindowDays: number;
+    enabledModules: Array<
+      "new_business_sidebar" | "recommended_business" | "images_redirect" | "videos_url"
+    >;
+    imageItems: HomeMediaItemRecord[];
+    videoItems: HomeMediaItemRecord[];
+    updatedAt?: string;
+  };
+  businesses: Array<{
+    id: string;
+    businessName: string;
+    mode: "online" | "offline" | "hybrid";
+    city: string;
+    country: string;
+    category: string;
+    slug: string;
+    trustScore: number;
+    yearsInField: number;
+    isRecommended?: boolean;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+};
 
 function toEmbedVideoUrl(rawUrl: string) {
   const url = rawUrl.trim();
@@ -74,44 +98,22 @@ function MediaStrip({
   );
 }
 
-export function HomeBusinessShowcase() {
+export function HomeBusinessShowcase({
+  initialData,
+}: {
+  initialData: HomeShowcaseData;
+}) {
   const [active, setActive] = useState<"online" | "offline">("online");
-  const [data, setData] = useState<HomeShowcaseData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [streamIndex, setStreamIndex] = useState(0);
-
-  useEffect(() => {
-    let isMounted = true;
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const row = await fetchHomePageShowcase();
-        if (isMounted) setData(row);
-      } catch (loadError) {
-        if (isMounted) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Unable to load home listings.",
-          );
-        }
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    }
-    void load();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const settings = useMemo<HomePageSettingsRecord | null>(
-    () => data?.settings ?? null,
-    [data],
-  );
-  const rows = useMemo(() => data?.businesses ?? [], [data]);
+  const settings = initialData.settings;
+  const rows = initialData.businesses;
+  const newestCreatedAtMs = useMemo(() => {
+    if (!rows.length) return 0;
+    return rows.reduce((maxValue, row) => {
+      const rowTime = Date.parse(row.createdAt);
+      return Number.isFinite(rowTime) ? Math.max(maxValue, rowTime) : maxValue;
+    }, 0);
+  }, [rows]);
 
   const filteredBusinesses = useMemo(
     () =>
@@ -124,10 +126,9 @@ export function HomeBusinessShowcase() {
   );
 
   const newBusinesses = useMemo(() => {
-    if (!settings) return [];
-    const cutoff = Date.now() - settings.newBusinessWindowDays * 24 * 60 * 60 * 1000;
+    const cutoff = newestCreatedAtMs - settings.newBusinessWindowDays * 24 * 60 * 60 * 1000;
     return rows.filter((item) => Date.parse(item.createdAt) >= cutoff).slice(0, 8);
-  }, [rows, settings]);
+  }, [newestCreatedAtMs, rows, settings.newBusinessWindowDays]);
 
   const recommendedBusinesses = useMemo(
     () => rows.filter((item) => Boolean(item.isRecommended)).slice(0, 8),
@@ -135,7 +136,6 @@ export function HomeBusinessShowcase() {
   );
 
   const streamBlocks = useMemo(() => {
-    if (!settings) return [] as Array<{ key: string; title: string; node: ReactNode }>;
     const blocks: Array<{ key: string; title: string; node: ReactNode }> = [];
     for (const moduleKey of settings.enabledModules) {
       if (moduleKey === "new_business_sidebar" && newBusinesses.length > 0) {
@@ -192,7 +192,7 @@ export function HomeBusinessShowcase() {
       }
     }
     return blocks;
-  }, [newBusinesses, recommendedBusinesses, settings]);
+  }, [newBusinesses, recommendedBusinesses, settings.enabledModules, settings.imageItems, settings.videoItems]);
 
   useEffect(() => {
     if (streamBlocks.length <= 1) return;
@@ -204,25 +204,12 @@ export function HomeBusinessShowcase() {
     };
   }, [streamBlocks.length]);
 
-  useEffect(() => {
-    setStreamIndex(0);
-  }, [streamBlocks.length]);
+  const currentStreamIndex =
+    streamBlocks.length > 0 ? streamIndex % streamBlocks.length : 0;
 
   return (
     <section className="space-y-6">
-      {loading ? (
-        <div className="rounded-2xl border border-border bg-surface p-4 text-sm text-muted">
-          Loading home data...
-        </div>
-      ) : null}
-
-      {error ? (
-        <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
-          {error}
-        </div>
-      ) : null}
-
-      {!loading && !error && streamBlocks.length > 0 ? (
+      {streamBlocks.length > 0 ? (
         <section className="rounded-3xl border border-border bg-white p-5">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h2 className="text-lg font-semibold tracking-tight">
@@ -230,95 +217,92 @@ export function HomeBusinessShowcase() {
             </h2>
             {streamBlocks.length > 1 ? (
               <p className="text-xs text-muted">
-                Auto-scroll {streamIndex + 1}/{streamBlocks.length}
+                Auto-scroll {currentStreamIndex + 1}/{streamBlocks.length}
               </p>
             ) : null}
           </div>
-          {streamBlocks[streamIndex]?.node}
+          {streamBlocks[currentStreamIndex]?.node}
         </section>
       ) : null}
 
-      {!loading && !error ? (
-        <section className="rounded-3xl border border-border bg-white p-6">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-2xl font-semibold tracking-tight">Listed businesses</h2>
-              <p className="mt-1 text-sm text-muted">
-                Showing up to {settings?.businessLimit ?? 20} records from admin-selected
-                mode ({settings?.businessMode ?? "both"}).
-              </p>
-            </div>
-            <div className="rounded-xl border border-border p-1">
-              {(["online", "offline"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setActive(tab)}
-                  className={`rounded-lg px-3 py-2 text-sm capitalize transition ${
-                    active === tab
-                      ? "bg-brand text-white"
-                      : "text-muted hover:bg-accent"
-                  }`}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
+      <section className="rounded-3xl border border-border bg-white p-6">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight">Listed businesses</h2>
+            <p className="mt-1 text-sm text-muted">
+              Showing up to {settings.businessLimit} records from admin-selected mode (
+              {settings.businessMode}).
+            </p>
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            {!filteredBusinesses.length ? (
-              <article className="rounded-xl border border-border bg-surface p-4 text-sm text-muted md:col-span-2">
-                No businesses available in this tab right now.
-              </article>
-            ) : null}
-            {filteredBusinesses.map((business) => {
-              const isNew =
-                settings &&
-                Date.parse(business.createdAt) >=
-                  Date.now() - settings.newBusinessWindowDays * 24 * 60 * 60 * 1000;
-              return (
-                <article key={business.id} className="rounded-xl border border-border bg-surface p-4">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <h3 className="font-semibold">{business.businessName}</h3>
-                    <div className="flex items-center gap-1">
-                      {business.isRecommended ? (
-                        <span className="rounded-full bg-accent px-2 py-1 text-[11px] font-medium text-brand-strong">
-                          Recommended
-                        </span>
-                      ) : null}
-                      {isNew ? (
-                        <span className="rounded-full bg-brand/10 px-2 py-1 text-[11px] font-medium text-brand-strong">
-                          New
-                        </span>
-                      ) : null}
-                    </div>
+          <div className="rounded-xl border border-border p-1">
+            {(["online", "offline"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActive(tab)}
+                className={`rounded-lg px-3 py-2 text-sm capitalize transition ${
+                  active === tab
+                    ? "bg-brand text-white"
+                    : "text-muted hover:bg-accent"
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {!filteredBusinesses.length ? (
+            <article className="rounded-xl border border-border bg-surface p-4 text-sm text-muted md:col-span-2">
+              No businesses available in this tab right now.
+            </article>
+          ) : null}
+          {filteredBusinesses.map((business) => {
+            const isNew =
+              Date.parse(business.createdAt) >=
+              newestCreatedAtMs - settings.newBusinessWindowDays * 24 * 60 * 60 * 1000;
+            return (
+              <article key={business.id} className="rounded-xl border border-border bg-surface p-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h3 className="font-semibold">{business.businessName}</h3>
+                  <div className="flex items-center gap-1">
+                    {business.isRecommended ? (
+                      <span className="rounded-full bg-accent px-2 py-1 text-[11px] font-medium text-brand-strong">
+                        Recommended
+                      </span>
+                    ) : null}
+                    {isNew ? (
+                      <span className="rounded-full bg-brand/10 px-2 py-1 text-[11px] font-medium text-brand-strong">
+                        New
+                      </span>
+                    ) : null}
                   </div>
-                  <p className="text-sm text-muted">
-                    {business.city}, {business.country} | {business.category}
-                  </p>
-                  <p className="mt-2 text-xs text-muted">
-                    Trust {business.trustScore} | {business.yearsInField} years
-                  </p>
-                  <Link
-                    href={`/business/${business.slug}`}
-                    className="mt-3 inline-flex rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
-                  >
-                    Open profile
-                  </Link>
-                </article>
-              );
-            })}
-          </div>
-          <div className="mt-5">
-            <Link
-              href="/directory"
-              className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-strong"
-            >
-              Explore full directory
-            </Link>
-          </div>
-        </section>
-      ) : null}
+                </div>
+                <p className="text-sm text-muted">
+                  {business.city}, {business.country} | {business.category}
+                </p>
+                <p className="mt-2 text-xs text-muted">
+                  Trust {business.trustScore} | {business.yearsInField} years
+                </p>
+                <Link
+                  href={`/business/${business.slug}`}
+                  className="mt-3 inline-flex rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
+                >
+                  Open profile
+                </Link>
+              </article>
+            );
+          })}
+        </div>
+        <div className="mt-5">
+          <Link
+            href="/directory"
+            className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-strong"
+          >
+            Explore full directory
+          </Link>
+        </div>
+      </section>
     </section>
   );
 }

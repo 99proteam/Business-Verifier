@@ -1,14 +1,8 @@
-"use client";
-
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import {
   BusinessApplicationRecord,
   BusinessTrustBadgeRecord,
   ProDepositLedgerRecord,
-  fetchBusinessBySlug,
-  fetchProDepositLedgerByBusinessId,
-  fetchPublicBusinessTrustBadgeBySlug,
 } from "@/lib/firebase/repositories";
 
 function formatINR(value: number) {
@@ -19,62 +13,17 @@ function formatINR(value: number) {
   }).format(value);
 }
 
-export function PublicBusinessProfile({ slug }: { slug: string }) {
-  const [business, setBusiness] = useState<BusinessApplicationRecord | null>(null);
-  const [badge, setBadge] = useState<BusinessTrustBadgeRecord | null>(null);
-  const [ledger, setLedger] = useState<ProDepositLedgerRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const businessRow = await fetchBusinessBySlug(slug);
-        if (!businessRow || businessRow.status !== "approved") {
-          if (mounted) {
-            setBusiness(null);
-            setBadge(null);
-            setLedger([]);
-          }
-          return;
-        }
-        const [badgeRow, ledgerRows] = await Promise.all([
-          fetchPublicBusinessTrustBadgeBySlug(slug),
-          fetchProDepositLedgerByBusinessId(businessRow.id),
-        ]);
-        if (!mounted) return;
-        setBusiness(businessRow);
-        setBadge(badgeRow);
-        setLedger(ledgerRows);
-      } catch (loadError) {
-        if (mounted) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Unable to load trust profile.",
-          );
-        }
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
-    void load();
-    return () => {
-      mounted = false;
-    };
-  }, [slug]);
-
-  if (loading) {
-    return (
-      <div className="rounded-2xl border border-border bg-surface p-4 text-sm text-muted">
-        Loading trust profile...
-      </div>
-    );
-  }
-
+export function PublicBusinessProfile({
+  business,
+  badge,
+  ledger,
+  error,
+}: {
+  business: BusinessApplicationRecord | null;
+  badge: BusinessTrustBadgeRecord | null;
+  ledger: ProDepositLedgerRecord[];
+  error?: string | null;
+}) {
   if (error) {
     return (
       <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
@@ -156,8 +105,7 @@ export function PublicBusinessProfile({ slug }: { slug: string }) {
         <h2 className="text-lg font-semibold tracking-tight">Verification transparency</h2>
         <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
           <p>
-            Mobile:{" "}
-            <b>{business.verificationChecklist.mobileVerified ? "Verified" : "Pending"}</b>
+            Mobile: <b>{business.verificationChecklist.mobileVerified ? "Verified" : "Pending"}</b>
           </p>
           <p>
             Address:{" "}
@@ -174,9 +122,7 @@ export function PublicBusinessProfile({ slug }: { slug: string }) {
           <p className="sm:col-span-2">
             Public documents:{" "}
             <b>
-              {business.verificationChecklist.publicDocumentsVerified
-                ? "Verified"
-                : "Pending"}
+              {business.verificationChecklist.publicDocumentsVerified ? "Verified" : "Pending"}
             </b>
           </p>
         </div>

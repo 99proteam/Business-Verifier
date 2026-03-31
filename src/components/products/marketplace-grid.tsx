@@ -14,11 +14,11 @@ import { cn } from "@/lib/utils";
 
 type FavoriteState = Record<string, boolean>;
 
-export function MarketplaceGrid() {
+export function MarketplaceGrid({ initialRows }: { initialRows: DigitalProductRecord[] }) {
   const { user, hasFirebaseConfig } = useAuth();
-  const [rows, setRows] = useState<DigitalProductRecord[]>([]);
+  const [rows, setRows] = useState<DigitalProductRecord[]>(initialRows);
   const [favorites, setFavorites] = useState<FavoriteState>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(initialRows.length === 0);
   const [error, setError] = useState<string | null>(null);
 
   const loadProducts = useCallback(async () => {
@@ -26,20 +26,10 @@ export function MarketplaceGrid() {
       setLoading(false);
       return;
     }
-    setLoading(true);
     setError(null);
     try {
       const products = await fetchPublicDigitalProducts();
       setRows(products);
-
-      if (user) {
-        const favoritePairs = await Promise.all(
-          products.map(async (item) => [item.id, await isProductFavorited(item.id, user.uid)]),
-        );
-        setFavorites(Object.fromEntries(favoritePairs));
-      } else {
-        setFavorites({});
-      }
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -49,11 +39,27 @@ export function MarketplaceGrid() {
     } finally {
       setLoading(false);
     }
-  }, [hasFirebaseConfig, user]);
+  }, [hasFirebaseConfig]);
 
   useEffect(() => {
-    void loadProducts();
-  }, [loadProducts]);
+    if (!rows.length) {
+      void loadProducts();
+    }
+  }, [loadProducts, rows.length]);
+
+  useEffect(() => {
+    async function loadFavorites() {
+      if (!user || !rows.length) {
+        setFavorites({});
+        return;
+      }
+      const favoritePairs = await Promise.all(
+        rows.map(async (item) => [item.id, await isProductFavorited(item.id, user.uid)]),
+      );
+      setFavorites(Object.fromEntries(favoritePairs));
+    }
+    void loadFavorites();
+  }, [rows, user]);
 
   async function toggleFavorite(productId: string) {
     if (!user) {

@@ -13,12 +13,13 @@ type ExternalProduct = {
   rating?: number;
 };
 
-export function ExternalProductsGrid() {
-  const [rows, setRows] = useState<ExternalProduct[]>([]);
-  const [loading, setLoading] = useState(true);
+export function ExternalProductsGrid({ initialRows }: { initialRows: ExternalProduct[] }) {
+  const [rows, setRows] = useState<ExternalProduct[]>(initialRows);
+  const [loading, setLoading] = useState(initialRows.length === 0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (rows.length > 0) return;
     let mounted = true;
     async function load() {
       setLoading(true);
@@ -44,7 +45,7 @@ export function ExternalProductsGrid() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [rows.length]);
 
   return (
     <section className="glass rounded-3xl p-6">

@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { GroupThread } from "@/components/groups/group-thread";
 import { SiteHeader } from "@/components/layout/site-header";
+import { getCachedGroupThreadBundle } from "@/lib/server/public-cache";
+
+export const revalidate = 60;
 
 export default async function GroupDetailsPage({
   params,
@@ -8,6 +11,10 @@ export default async function GroupDetailsPage({
   params: Promise<{ groupId: string }>;
 }) {
   const { groupId } = await params;
+  const bundle = await getCachedGroupThreadBundle(groupId).catch(() => ({
+    group: null,
+    messages: [],
+  }));
 
   return (
     <div>
@@ -19,7 +26,11 @@ export default async function GroupDetailsPage({
         >
           Back to groups
         </Link>
-        <GroupThread groupId={groupId} />
+        <GroupThread
+          groupId={groupId}
+          initialGroup={bundle.group}
+          initialMessages={bundle.messages}
+        />
       </main>
     </div>
   );

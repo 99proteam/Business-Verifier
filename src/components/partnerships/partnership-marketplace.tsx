@@ -11,13 +11,17 @@ import {
   UserIdentityProfileRecord,
 } from "@/lib/firebase/repositories";
 
-export function PartnershipMarketplace() {
+export function PartnershipMarketplace({
+  initialRows,
+}: {
+  initialRows: PartnershipOpportunityRecord[];
+}) {
   const { user, hasFirebaseConfig } = useAuth();
   const router = useRouter();
-  const [rows, setRows] = useState<PartnershipOpportunityRecord[]>([]);
+  const [rows, setRows] = useState<PartnershipOpportunityRecord[]>(initialRows);
   const [identity, setIdentity] = useState<UserIdentityProfileRecord | null>(null);
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(initialRows.length === 0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -28,10 +32,9 @@ export function PartnershipMarketplace() {
         setLoading(false);
         return;
       }
-      setLoading(true);
       setError(null);
       try {
-        const opportunities = await fetchPartnershipOpportunities();
+        const opportunities = rows.length ? rows : await fetchPartnershipOpportunities();
         setRows(opportunities);
         if (user) {
           setIdentity(await fetchCurrentUserIdentityProfile(user.uid));
@@ -49,7 +52,7 @@ export function PartnershipMarketplace() {
       }
     }
     void load();
-  }, [hasFirebaseConfig, user]);
+  }, [hasFirebaseConfig, rows, user]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

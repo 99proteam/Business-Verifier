@@ -13,12 +13,12 @@ import {
 
 type MembershipMap = Record<string, boolean>;
 
-export function PublicGroupsCatalog() {
+export function PublicGroupsCatalog({ initialRows }: { initialRows: GroupRecord[] }) {
   const { user, hasFirebaseConfig } = useAuth();
-  const [rows, setRows] = useState<GroupRecord[]>([]);
+  const [rows, setRows] = useState<GroupRecord[]>(initialRows);
   const [query, setQuery] = useState("");
   const [membership, setMembership] = useState<MembershipMap>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(initialRows.length === 0);
   const [busyGroupId, setBusyGroupId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,10 +28,9 @@ export function PublicGroupsCatalog() {
         setLoading(false);
         return;
       }
-      setLoading(true);
       setError(null);
       try {
-        const groups = await fetchPublicGroups();
+        const groups = rows.length ? rows : await fetchPublicGroups();
         setRows(groups);
         if (user) {
           const memberPairs = await Promise.all(
@@ -50,7 +49,7 @@ export function PublicGroupsCatalog() {
       }
     }
     void load();
-  }, [hasFirebaseConfig, user]);
+  }, [hasFirebaseConfig, rows, user]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

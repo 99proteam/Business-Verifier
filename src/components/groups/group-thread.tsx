@@ -13,12 +13,22 @@ import {
   unjoinGroup,
 } from "@/lib/firebase/repositories";
 
-export function GroupThread({ groupId, adminMode = false }: { groupId: string; adminMode?: boolean }) {
+export function GroupThread({
+  groupId,
+  adminMode = false,
+  initialGroup = null,
+  initialMessages = [],
+}: {
+  groupId: string;
+  adminMode?: boolean;
+  initialGroup?: GroupRecord | null;
+  initialMessages?: GroupMessageRecord[];
+}) {
   const { user, hasFirebaseConfig } = useAuth();
-  const [group, setGroup] = useState<GroupRecord | null>(null);
-  const [messages, setMessages] = useState<GroupMessageRecord[]>([]);
+  const [group, setGroup] = useState<GroupRecord | null>(initialGroup);
+  const [messages, setMessages] = useState<GroupMessageRecord[]>(initialMessages);
   const [isMember, setIsMember] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialGroup);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +46,6 @@ export function GroupThread({ groupId, adminMode = false }: { groupId: string; a
       setLoading(false);
       return;
     }
-    setLoading(true);
     setError(null);
     try {
       const [groupRow, groupMessages] = await Promise.all([

@@ -1,10 +1,30 @@
 import Link from "next/link";
 import { ArrowRight, ShieldCheck } from "lucide-react";
-import { HomeBusinessShowcase } from "@/components/home/home-business-showcase";
+import { HomeBusinessShowcase, type HomeShowcaseData } from "@/components/home/home-business-showcase";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { SiteHeader } from "@/components/layout/site-header";
+import { getCachedHomeShowcase } from "@/lib/server/public-cache";
 
-export default function Home() {
+export const revalidate = 300;
+
+export default async function Home() {
+  const fallbackShowcase: HomeShowcaseData = {
+    settings: {
+      businessMode: "both" as const,
+      businessLimit: 20,
+      newBusinessWindowDays: 30,
+      enabledModules: [
+        "new_business_sidebar",
+        "recommended_business",
+        "images_redirect",
+        "videos_url",
+      ],
+      imageItems: [],
+      videoItems: [],
+    },
+    businesses: [],
+  };
+  const showcase = await getCachedHomeShowcase().catch(() => fallbackShowcase);
   return (
     <div className="noise-bg">
       <SiteHeader />
@@ -39,7 +59,7 @@ export default function Home() {
           </div>
         </section>
 
-        <HomeBusinessShowcase />
+        <HomeBusinessShowcase initialData={showcase} />
       </main>
       <SiteFooter />
     </div>

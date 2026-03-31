@@ -1,11 +1,5 @@
-"use client";
-
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import {
-  BusinessTrustBadgeRecord,
-  fetchPublicBusinessTrustBadgeByBusinessId,
-} from "@/lib/firebase/repositories";
+import { BusinessTrustBadgeRecord } from "@/lib/firebase/repositories";
 
 function formatINR(value: number) {
   return new Intl.NumberFormat("en-IN", {
@@ -15,30 +9,7 @@ function formatINR(value: number) {
   }).format(value);
 }
 
-export function TrustBadgeWidget({ businessId }: { businessId: string }) {
-  const [row, setRow] = useState<BusinessTrustBadgeRecord | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let mounted = true;
-    async function load() {
-      setLoading(true);
-      const badge = await fetchPublicBusinessTrustBadgeByBusinessId(businessId);
-      if (mounted) {
-        setRow(badge);
-        setLoading(false);
-      }
-    }
-    void load();
-    return () => {
-      mounted = false;
-    };
-  }, [businessId]);
-
-  if (loading) {
-    return <div className="p-3 text-xs text-muted">Loading trust badge...</div>;
-  }
-
+export function TrustBadgeWidget({ row }: { row: BusinessTrustBadgeRecord | null }) {
   if (!row) {
     return <div className="p-3 text-xs text-danger">Business trust profile unavailable.</div>;
   }
