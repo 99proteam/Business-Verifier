@@ -1,6 +1,8 @@
 import { unstable_cache } from "next/cache";
 import {
+  fetchBusinessServicesByOwner,
   fetchBusinessBySlug,
+  fetchDigitalProductsByOwner,
   fetchDigitalProductBySlug,
   fetchGeoCatalogCountries,
   fetchGroupById,
@@ -9,6 +11,7 @@ import {
   fetchPartnershipOpportunities,
   fetchProDepositLedgerByBusinessId,
   fetchPublicBusinessDirectory,
+  fetchPublicBusinessServices,
   fetchPublicBusinessTrustBadgeBySlug,
   fetchPublicDigitalProducts,
   fetchPublicGroups,
@@ -123,16 +126,22 @@ export async function getCachedBusinessProfileBundle(slug: string) {
           business: null,
           badge: null,
           ledger: [],
+          products: [],
+          services: [],
         };
       }
-      const [badge, ledger] = await Promise.all([
+      const [badge, ledger, products, services] = await Promise.all([
         fetchPublicBusinessTrustBadgeBySlug(slug),
         fetchProDepositLedgerByBusinessId(business.id),
+        fetchDigitalProductsByOwner(business.ownerUid),
+        fetchBusinessServicesByOwner(business.ownerUid),
       ]);
       return {
         business,
         badge,
         ledger,
+        products,
+        services,
       };
     },
     [`public-business-profile-${slug}`],
@@ -144,6 +153,12 @@ export const getCachedPublicProducts = unstable_cache(
   async () => fetchPublicDigitalProducts(),
   ["public-products-list"],
   { revalidate: 300, tags: ["public-products"] },
+);
+
+export const getCachedPublicServices = unstable_cache(
+  async () => fetchPublicBusinessServices(),
+  ["public-services-list"],
+  { revalidate: 300, tags: ["public-services"] },
 );
 
 export async function getCachedProductBySlug(slug: string) {

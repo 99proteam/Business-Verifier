@@ -17,7 +17,7 @@ import {
 
 type SearchHit = {
   id: string;
-  type: "business" | "product" | "group" | "partnership";
+  type: "business" | "product" | "service" | "group" | "partnership";
   title: string;
   subtitle: string;
   href: string;

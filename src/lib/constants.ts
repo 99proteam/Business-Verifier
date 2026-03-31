@@ -21,7 +21,7 @@ export const PROFILE_LINKS = [
   { href: "/dashboard/partnerships", label: "Partnership Deals" },
   { href: "/dashboard/security", label: "Security" },
   { href: "/dashboard/business/onboarding", label: "Business Onboarding" },
-  { href: "/dashboard/business/products", label: "Business Products" },
+  { href: "/dashboard/business/products", label: "Business Offerings" },
   { href: "/dashboard/business/orders", label: "Business Orders" },
   { href: "/dashboard/business/groups", label: "Business Groups" },
   { href: "/dashboard/business/notifications", label: "Business Notifications" },

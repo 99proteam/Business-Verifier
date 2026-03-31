@@ -1,7 +1,9 @@
 import Link from "next/link";
 import {
   BusinessApplicationRecord,
+  BusinessServiceRecord,
   BusinessTrustBadgeRecord,
+  DigitalProductRecord,
   ProDepositLedgerRecord,
 } from "@/lib/firebase/repositories";
 
@@ -17,11 +19,15 @@ export function PublicBusinessProfile({
   business,
   badge,
   ledger,
+  products,
+  services,
   error,
 }: {
   business: BusinessApplicationRecord | null;
   badge: BusinessTrustBadgeRecord | null;
   ledger: ProDepositLedgerRecord[];
+  products: DigitalProductRecord[];
+  services: BusinessServiceRecord[];
   error?: string | null;
 }) {
   if (error) {
@@ -98,6 +104,59 @@ export function PublicBusinessProfile({
               {entry.note && <p className="mt-1 text-xs text-muted">{entry.note}</p>}
             </article>
           ))}
+        </div>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Listed products and services</h2>
+        <p className="mt-1 text-xs text-muted">
+          Buyers can review published products and services before making decisions.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <article className="rounded-2xl border border-border bg-surface p-4">
+            <h3 className="text-sm font-semibold">Products</h3>
+            {!products.length ? (
+              <p className="mt-2 text-xs text-muted">No products listed yet.</p>
+            ) : (
+              <div className="mt-2 space-y-2">
+                {products.slice(0, 6).map((product) => (
+                  <Link
+                    key={product.id}
+                    href={`/products/${product.uniqueLinkSlug}`}
+                    className="block rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
+                  >
+                    <p className="font-medium">{product.title}</p>
+                    <p className="text-xs text-muted">
+                      {product.category} | INR {product.pricingPlans[0]?.price ?? product.price}
+                    </p>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </article>
+          <article id="services" className="rounded-2xl border border-border bg-surface p-4">
+            <h3 className="text-sm font-semibold">Services</h3>
+            {!services.length ? (
+              <p className="mt-2 text-xs text-muted">No services listed yet.</p>
+            ) : (
+              <div className="mt-2 space-y-2">
+                {services.slice(0, 6).map((service) => (
+                  <article
+                    key={service.id}
+                    className="rounded-xl border border-border px-3 py-2 text-sm"
+                  >
+                    <p className="font-medium">{service.title}</p>
+                    <p className="text-xs text-muted">
+                      {service.category} | {service.currency} {service.startingPrice}
+                    </p>
+                    <p className="text-xs text-muted">
+                      {service.serviceMode} | {service.deliveryMode}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            )}
+          </article>
         </div>
       </section>
 

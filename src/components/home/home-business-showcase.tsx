@@ -33,6 +33,17 @@ export type HomeShowcaseData = {
     createdAt: string;
     updatedAt: string;
   }>;
+  offeringsByBusiness: Record<
+    string,
+    Array<{
+      id: string;
+      kind: "product" | "service";
+      title: string;
+      category: string;
+      priceLabel: string;
+      href: string;
+    }>
+  >;
 };
 
 function toEmbedVideoUrl(rawUrl: string) {
@@ -107,6 +118,7 @@ export function HomeBusinessShowcase({
   const [streamIndex, setStreamIndex] = useState(0);
   const settings = initialData.settings;
   const rows = initialData.businesses;
+  const offeringsByBusiness = initialData.offeringsByBusiness ?? {};
   const newestCreatedAtMs = useMemo(() => {
     if (!rows.length) return 0;
     return rows.reduce((maxValue, row) => {
@@ -213,7 +225,7 @@ export function HomeBusinessShowcase({
         <section className="rounded-3xl border border-border bg-white p-5">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h2 className="text-lg font-semibold tracking-tight">
-              {streamBlocks[streamIndex]?.title}
+              {streamBlocks[currentStreamIndex]?.title}
             </h2>
             {streamBlocks.length > 1 ? (
               <p className="text-xs text-muted">
@@ -261,6 +273,7 @@ export function HomeBusinessShowcase({
             const isNew =
               Date.parse(business.createdAt) >=
               newestCreatedAtMs - settings.newBusinessWindowDays * 24 * 60 * 60 * 1000;
+            const offerings = offeringsByBusiness[business.id] ?? [];
             return (
               <article key={business.id} className="rounded-xl border border-border bg-surface p-4">
                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -284,6 +297,28 @@ export function HomeBusinessShowcase({
                 <p className="mt-2 text-xs text-muted">
                   Trust {business.trustScore} | {business.yearsInField} years
                 </p>
+                <div className="mt-3 space-y-2">
+                  <p className="text-xs text-muted">Products and services</p>
+                  {!offerings.length ? (
+                    <p className="text-xs text-muted">No listed products/services yet.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {offerings.slice(0, 3).map((offering) => (
+                        <Link
+                          key={`${business.id}_${offering.kind}_${offering.id}`}
+                          href={offering.href}
+                          className="block rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
+                        >
+                          <span className="font-medium">
+                            {offering.kind === "product" ? "Product" : "Service"}:{" "}
+                            {offering.title}
+                          </span>
+                          <span className="text-muted"> | {offering.priceLabel}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <Link
                   href={`/business/${business.slug}`}
                   className="mt-3 inline-flex rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"

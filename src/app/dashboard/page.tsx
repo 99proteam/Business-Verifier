@@ -121,8 +121,8 @@ const cards = [
     icon: Users,
   },
   {
-    title: "Digital products",
-    body: "Create products, mark no-refund tags, and track favorite customers.",
+    title: "Products and services",
+    body: "Create products/services, mark no-refund tags, and track favorite customers.",
     href: "/dashboard/business/products",
     icon: CircleDollarSign,
   },

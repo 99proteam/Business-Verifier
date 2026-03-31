@@ -15,6 +15,8 @@ export default async function PublicBusinessProfilePage({
     business: null,
     badge: null,
     ledger: [],
+    products: [],
+    services: [],
   };
   try {
     bundle = await getCachedBusinessProfileBundle(slug);
@@ -31,6 +33,8 @@ export default async function PublicBusinessProfilePage({
           business={bundle.business}
           badge={bundle.badge}
           ledger={bundle.ledger}
+          products={bundle.products}
+          services={bundle.services}
           error={profileError}
         />
       </main>

@@ -898,6 +898,16 @@ export interface HomePageSettingsRecord {
 export interface HomePageShowcaseRecord {
   settings: HomePageSettingsRecord;
   businesses: BusinessApplicationRecord[];
+  offeringsByBusiness: Record<string, HomeBusinessOfferingRecord[]>;
+}
+
+export interface HomeBusinessOfferingRecord {
+  id: string;
+  kind: "product" | "service";
+  title: string;
+  category: string;
+  priceLabel: string;
+  href: string;
 }
 
 const homePageDefaults: HomePageSettingsRecord = {
@@ -1040,6 +1050,10 @@ export async function fetchHomePageShowcase() {
     fetchHomePageSettings(),
     fetchPublicBusinessDirectory(),
   ]);
+  const [products, services] = await Promise.all([
+    fetchPublicDigitalProductsLite(180).catch(() => [] as DigitalProductRecord[]),
+    fetchPublicBusinessServices(180).catch(() => [] as BusinessServiceRecord[]),
+  ]);
 
   const now = Date.now();
   const newCutoff = now - settings.newBusinessWindowDays * 24 * 60 * 60 * 1000;
@@ -1068,9 +1082,57 @@ export async function fetchHomePageShowcase() {
     });
   }
 
+  const selectedBusinesses = selected.slice(0, Math.max(1, Math.min(20, settings.businessLimit)));
+  const selectedById = new Map(selectedBusinesses.map((row) => [row.id, row]));
+  const selectedByOwnerUid = new Map(selectedBusinesses.map((row) => [row.ownerUid, row]));
+  const selectedBySlug = new Map(selectedBusinesses.map((row) => [row.slug, row]));
+  const offeringsByBusiness = new Map<string, HomeBusinessOfferingRecord[]>();
+
+  function appendOffering(businessId: string, row: HomeBusinessOfferingRecord) {
+    const existing = offeringsByBusiness.get(businessId) ?? [];
+    if (existing.length >= 4) return;
+    if (existing.some((entry) => entry.id === row.id && entry.kind === row.kind)) return;
+    offeringsByBusiness.set(businessId, [...existing, row]);
+  }
+
+  for (const row of products) {
+    const business =
+      (row.ownerBusinessSlug ? selectedBySlug.get(row.ownerBusinessSlug) : null) ??
+      selectedByOwnerUid.get(row.ownerUid) ??
+      null;
+    if (!business || !selectedById.has(business.id)) continue;
+    appendOffering(business.id, {
+      id: row.id,
+      kind: "product",
+      title: row.title,
+      category: row.category,
+      priceLabel: `INR ${row.pricingPlans[0]?.price ?? row.price}`,
+      href: `/products/${row.uniqueLinkSlug}`,
+    });
+  }
+
+  for (const row of services) {
+    const business =
+      (row.ownerBusinessSlug ? selectedBySlug.get(row.ownerBusinessSlug) : null) ??
+      selectedByOwnerUid.get(row.ownerUid) ??
+      null;
+    if (!business || !selectedById.has(business.id)) continue;
+    appendOffering(business.id, {
+      id: row.id,
+      kind: "service",
+      title: row.title,
+      category: row.category,
+      priceLabel: `${row.currency} ${row.startingPrice}`,
+      href: row.ownerBusinessSlug
+        ? `/business/${row.ownerBusinessSlug}#services`
+        : "/directory",
+    });
+  }
+
   return {
     settings,
-    businesses: selected.slice(0, Math.max(1, Math.min(20, settings.businessLimit))),
+    businesses: selectedBusinesses,
+    offeringsByBusiness: Object.fromEntries(offeringsByBusiness.entries()),
   } satisfies HomePageShowcaseRecord;
 }
 
@@ -2548,6 +2610,31 @@ export interface DigitalProductRecord extends DigitalProductInput {
   updatedAt: string;
 }
 
+export type BusinessServiceMode = "online" | "offline" | "hybrid";
+export type BusinessServiceDeliveryMode = "remote" | "onsite" | "both";
+
+export interface BusinessServiceInput {
+  ownerUid: string;
+  ownerName: string;
+  title: string;
+  description: string;
+  category: string;
+  startingPrice: number;
+  currency: "INR" | "USD";
+  serviceMode: BusinessServiceMode;
+  deliveryMode: BusinessServiceDeliveryMode;
+}
+
+export interface BusinessServiceRecord extends BusinessServiceInput {
+  id: string;
+  uniqueLinkSlug: string;
+  ownerBusinessSlug?: string;
+  ownerTrustScore: number;
+  ownerCertificateSerial?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 function sanitizePricingPlanKey(value: string) {
   const key = value
     .trim()
@@ -2649,6 +2736,40 @@ function mapDigitalProduct(snapshotId: string, data: Record<string, unknown>) {
   } satisfies DigitalProductRecord;
 }
 
+function mapBusinessService(snapshotId: string, data: Record<string, unknown>) {
+  const rawCurrency = String(data.currency ?? "INR").trim().toUpperCase();
+  const currency: "INR" | "USD" = rawCurrency === "USD" ? "USD" : "INR";
+  const rawServiceMode = String(data.serviceMode ?? "online").trim().toLowerCase();
+  const serviceMode: BusinessServiceMode =
+    rawServiceMode === "offline" || rawServiceMode === "hybrid"
+      ? rawServiceMode
+      : "online";
+  const rawDelivery = String(data.deliveryMode ?? "remote").trim().toLowerCase();
+  const deliveryMode: BusinessServiceDeliveryMode =
+    rawDelivery === "onsite" || rawDelivery === "both" ? rawDelivery : "remote";
+
+  return {
+    id: snapshotId,
+    ownerUid: String(data.ownerUid ?? ""),
+    ownerName: String(data.ownerName ?? "Business"),
+    title: String(data.title ?? ""),
+    description: String(data.description ?? ""),
+    category: String(data.category ?? "General"),
+    startingPrice: Math.max(1, Math.round(Number(data.startingPrice ?? 0))),
+    currency,
+    serviceMode,
+    deliveryMode,
+    uniqueLinkSlug: String(data.uniqueLinkSlug ?? snapshotId),
+    ownerBusinessSlug: data.ownerBusinessSlug ? String(data.ownerBusinessSlug) : undefined,
+    ownerTrustScore: Number(data.ownerTrustScore ?? 0),
+    ownerCertificateSerial: data.ownerCertificateSerial
+      ? String(data.ownerCertificateSerial)
+      : undefined,
+    createdAt: toISODate(data.createdAt),
+    updatedAt: toISODate(data.updatedAt),
+  } satisfies BusinessServiceRecord;
+}
+
 async function enrichProductsWithSocialProof(rows: DigitalProductRecord[]) {
   const database = getDb();
   const ownerUids = [...new Set(rows.map((row) => row.ownerUid))];
@@ -2716,6 +2837,26 @@ export async function createDigitalProduct(input: DigitalProductInput) {
   return ref.id;
 }
 
+export async function createBusinessService(input: BusinessServiceInput) {
+  const owner = await fetchPrimaryBusinessByOwner(input.ownerUid);
+  if (!owner || owner.status !== "approved") {
+    throw new Error("Approve your business profile before listing services.");
+  }
+  const database = getDb();
+  const baseSlug = `${toSlug(input.title)}-${Math.random().toString(36).slice(2, 8)}`;
+  const ref = await addDoc(collection(database, "businessServices"), {
+    ...input,
+    startingPrice: Math.max(1, Math.round(input.startingPrice)),
+    uniqueLinkSlug: baseSlug,
+    ownerBusinessSlug: owner.slug,
+    ownerTrustScore: owner.trustScore,
+    ownerCertificateSerial: owner.certificateSerial ?? null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
 export async function fetchDigitalProductsByOwner(ownerUid: string) {
   const database = getDb();
   const snapshots = await getDocs(
@@ -2726,6 +2867,16 @@ export async function fetchDigitalProductsByOwner(ownerUid: string) {
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
+export async function fetchBusinessServicesByOwner(ownerUid: string) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(collection(database, "businessServices"), where("ownerUid", "==", ownerUid), limit(100)),
+  );
+  return snapshots.docs
+    .map((snapshot) => mapBusinessService(snapshot.id, snapshot.data()))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
 export async function fetchPublicDigitalProducts() {
   const database = getDb();
   const snapshots = await getDocs(
@@ -2733,6 +2884,30 @@ export async function fetchPublicDigitalProducts() {
   );
   const rows = snapshots.docs.map((snapshot) => mapDigitalProduct(snapshot.id, snapshot.data()));
   return enrichProductsWithSocialProof(rows);
+}
+
+export async function fetchPublicDigitalProductsLite(limitRows = 120) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "digitalProducts"),
+      orderBy("createdAt", "desc"),
+      limit(Math.max(1, Math.min(300, Math.round(limitRows)))),
+    ),
+  );
+  return snapshots.docs.map((snapshot) => mapDigitalProduct(snapshot.id, snapshot.data()));
+}
+
+export async function fetchPublicBusinessServices(limitRows = 120) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "businessServices"),
+      orderBy("createdAt", "desc"),
+      limit(Math.max(1, Math.min(300, Math.round(limitRows)))),
+    ),
+  );
+  return snapshots.docs.map((snapshot) => mapBusinessService(snapshot.id, snapshot.data()));
 }
 
 export async function fetchDigitalProductBySlug(slug: string) {
@@ -5100,7 +5275,7 @@ export async function fetchAdminGroupsOverview() {
 
 export interface PublicSearchHitRecord {
   id: string;
-  type: "business" | "product" | "group" | "partnership";
+  type: "business" | "product" | "service" | "group" | "partnership";
   title: string;
   subtitle: string;
   href: string;
@@ -5120,9 +5295,10 @@ export async function searchPublicMarketplace(queryText: string, maxRows = 60) {
   const text = queryText.trim().toLowerCase();
   if (!text) return [] as PublicSearchHitRecord[];
 
-  const [businesses, products, groups, opportunities] = await Promise.all([
+  const [businesses, products, services, groups, opportunities] = await Promise.all([
     fetchPublicBusinessDirectory(),
-    fetchPublicDigitalProducts(),
+    fetchPublicDigitalProductsLite().catch(() => [] as DigitalProductRecord[]),
+    fetchPublicBusinessServices().catch(() => [] as BusinessServiceRecord[]),
     fetchPublicGroups(),
     fetchPartnershipOpportunities(),
   ]);
@@ -5154,6 +5330,20 @@ export async function searchPublicMarketplace(queryText: string, maxRows = 60) {
       subtitle: `${row.ownerName} • INR ${row.price}`,
       href: `/products/${row.uniqueLinkSlug}`,
       score: score + row.salesCount / 25,
+    });
+  }
+
+  for (const row of services) {
+    const searchable = `${row.title} ${row.category} ${row.ownerName} ${row.serviceMode} ${row.deliveryMode}`;
+    const score = rankSearchText(searchable, text);
+    if (!score) continue;
+    hits.push({
+      id: row.id,
+      type: "service",
+      title: row.title,
+      subtitle: `${row.ownerName} | ${row.currency} ${row.startingPrice}`,
+      href: row.ownerBusinessSlug ? `/business/${row.ownerBusinessSlug}#services` : "/directory",
+      score: score + row.ownerTrustScore / 20,
     });
   }
 

@@ -7,10 +7,15 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
+  BusinessServiceDeliveryMode,
+  BusinessServiceMode,
+  BusinessServiceRecord,
+  createBusinessService,
   createDigitalProduct,
   DigitalProductPricingCycle,
   DigitalProductPricingPlanRecord,
   DigitalProductRecord,
+  fetchBusinessServicesByOwner,
   fetchDigitalProductsByOwner,
   sendProductOfferToFavoriteCustomers,
 } from "@/lib/firebase/repositories";
@@ -33,6 +38,7 @@ const fieldClass =
 export function ProductManager() {
   const { user, hasFirebaseConfig } = useAuth();
   const [rows, setRows] = useState<DigitalProductRecord[]>([]);
+  const [serviceRows, setServiceRows] = useState<BusinessServiceRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,6 +50,15 @@ export function ProductManager() {
   const [planName, setPlanName] = useState("");
   const [planCycle, setPlanCycle] = useState<DigitalProductPricingCycle>("one_time");
   const [planPrice, setPlanPrice] = useState("0");
+  const [serviceTitle, setServiceTitle] = useState("");
+  const [serviceCategory, setServiceCategory] = useState("");
+  const [serviceDescription, setServiceDescription] = useState("");
+  const [servicePrice, setServicePrice] = useState("0");
+  const [serviceCurrency, setServiceCurrency] = useState<"INR" | "USD">("INR");
+  const [serviceMode, setServiceMode] = useState<BusinessServiceMode>("online");
+  const [serviceDeliveryMode, setServiceDeliveryMode] =
+    useState<BusinessServiceDeliveryMode>("remote");
+  const [serviceSubmitting, setServiceSubmitting] = useState(false);
 
   const {
     register,
@@ -64,13 +79,17 @@ export function ProductManager() {
     }
     setLoading(true);
     try {
-      const products = await fetchDigitalProductsByOwner(user.uid);
+      const [products, services] = await Promise.all([
+        fetchDigitalProductsByOwner(user.uid),
+        fetchBusinessServicesByOwner(user.uid),
+      ]);
       setRows(products);
+      setServiceRows(services);
     } catch (loadError) {
       setError(
         loadError instanceof Error
           ? loadError.message
-          : "Unable to load digital products.",
+          : "Unable to load offerings.",
       );
     } finally {
       setLoading(false);
@@ -131,6 +150,60 @@ export function ProductManager() {
       );
     }
   };
+
+  async function onCreateService(event: FormEvent) {
+    event.preventDefault();
+    if (!user) {
+      setError("Please sign in first.");
+      return;
+    }
+    if (!hasFirebaseConfig) {
+      setError("Firebase config missing. Add NEXT_PUBLIC_FIREBASE_* values.");
+      return;
+    }
+    const title = serviceTitle.trim();
+    const category = serviceCategory.trim();
+    const description = serviceDescription.trim();
+    const price = Number(servicePrice);
+    if (!title || !category || description.length < 12 || !Number.isFinite(price) || price <= 0) {
+      setError("Service requires title, category, description, and valid price.");
+      return;
+    }
+
+    setServiceSubmitting(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await createBusinessService({
+        ownerUid: user.uid,
+        ownerName: user.displayName ?? "Business",
+        title,
+        category,
+        description,
+        startingPrice: price,
+        currency: serviceCurrency,
+        serviceMode,
+        deliveryMode: serviceDeliveryMode,
+      });
+      setInfo("Business service listed.");
+      setServiceTitle("");
+      setServiceCategory("");
+      setServiceDescription("");
+      setServicePrice("0");
+      setServiceCurrency("INR");
+      setServiceMode("online");
+      setServiceDeliveryMode("remote");
+      await loadProducts();
+    } catch (serviceError) {
+      setError(
+        serviceError instanceof Error
+          ? serviceError.message
+          : "Unable to create service right now.",
+      );
+    } finally {
+      setServiceSubmitting(false);
+    }
+  }
 
   function addPricingPlan() {
     const name = planName.trim();
@@ -209,9 +282,9 @@ export function ProductManager() {
   return (
     <div className="space-y-5">
       <div className="glass rounded-3xl p-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Digital Products</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Products and Services</h1>
         <p className="mt-2 text-sm text-muted">
-          Manage sellable digital products with no-refund highlighting and unique links.
+          Manage sellable products/services, no-refund product tags, and public trust visibility.
         </p>
         <Link
           href="/dashboard/business/orders"
@@ -323,6 +396,93 @@ export function ProductManager() {
         </button>
       </form>
 
+      <form onSubmit={onCreateService} className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Create service</h2>
+        <p className="mt-1 text-xs text-muted">
+          Publish offline/online services on your verified business profile.
+        </p>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-sm">Service title</span>
+            <input
+              value={serviceTitle}
+              onChange={(event) => setServiceTitle(event.target.value)}
+              className={fieldClass}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Category</span>
+            <input
+              value={serviceCategory}
+              onChange={(event) => setServiceCategory(event.target.value)}
+              className={fieldClass}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Starting price</span>
+            <input
+              type="number"
+              value={servicePrice}
+              onChange={(event) => setServicePrice(event.target.value)}
+              className={fieldClass}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Currency</span>
+            <select
+              value={serviceCurrency}
+              onChange={(event) => setServiceCurrency(event.target.value as "INR" | "USD")}
+              className={fieldClass}
+            >
+              <option value="INR">INR</option>
+              <option value="USD">USD</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Service mode</span>
+            <select
+              value={serviceMode}
+              onChange={(event) => setServiceMode(event.target.value as BusinessServiceMode)}
+              className={fieldClass}
+            >
+              <option value="online">Online</option>
+              <option value="offline">Offline</option>
+              <option value="hybrid">Hybrid</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Delivery</span>
+            <select
+              value={serviceDeliveryMode}
+              onChange={(event) =>
+                setServiceDeliveryMode(event.target.value as BusinessServiceDeliveryMode)
+              }
+              className={fieldClass}
+            >
+              <option value="remote">Remote</option>
+              <option value="onsite">Onsite</option>
+              <option value="both">Both</option>
+            </select>
+          </label>
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm">Description</span>
+            <textarea
+              rows={4}
+              value={serviceDescription}
+              onChange={(event) => setServiceDescription(event.target.value)}
+              className={fieldClass}
+            />
+          </label>
+        </div>
+        <button
+          type="submit"
+          disabled={serviceSubmitting}
+          className="mt-4 rounded-xl bg-brand px-3 py-2 text-sm font-medium text-white transition hover:bg-brand-strong disabled:opacity-70"
+        >
+          {serviceSubmitting ? "Saving..." : "Create service"}
+        </button>
+      </form>
+
       <form onSubmit={sendOffer} className="glass rounded-3xl p-6">
         <h2 className="text-lg font-semibold tracking-tight">Broadcast offer to favorites</h2>
         <p className="mt-1 text-xs text-muted">
@@ -376,13 +536,13 @@ export function ProductManager() {
       <section className="space-y-3">
         {loading && (
           <div className="rounded-2xl border border-border bg-surface p-4 text-sm text-muted">
-            Loading products...
+            Loading offerings...
           </div>
         )}
 
-        {!loading && !rows.length && (
+        {!loading && !rows.length && !serviceRows.length && (
           <div className="rounded-2xl border border-border bg-surface p-4 text-sm text-muted">
-            No products created yet.
+            No products/services created yet.
           </div>
         )}
 
@@ -393,7 +553,7 @@ export function ProductManager() {
               <span className="text-sm text-muted">INR {row.price}</span>
             </div>
             <p className="mt-1 text-sm text-muted">
-              {row.category} • Favorites {row.favoritesCount}
+              {row.category} | Favorites {row.favoritesCount}
             </p>
             {row.noRefund && (
               <p className="mt-2 inline-flex rounded-full bg-danger/10 px-2 py-1 text-xs text-danger">
@@ -410,7 +570,23 @@ export function ProductManager() {
             </div>
           </article>
         ))}
+
+        {serviceRows.map((row) => (
+          <article key={row.id} className="glass rounded-2xl p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-semibold">{row.title}</h3>
+              <span className="text-sm text-muted">
+                {row.currency} {row.startingPrice}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-muted">
+              {row.category} | {row.serviceMode} | {row.deliveryMode}
+            </p>
+            <p className="mt-2 text-xs text-muted">Service link key: {row.uniqueLinkSlug}</p>
+          </article>
+        ))}
       </section>
     </div>
   );
 }
+

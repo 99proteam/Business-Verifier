@@ -243,6 +243,11 @@ service cloud.firestore {
       allow write: if isAdmin() || ownsRecord();
     }
 
+    match /businessServices/{serviceId} {
+      allow read: if true;
+      allow write: if isAdmin() || ownsRecord();
+    }
+
     match /digitalProducts/{productId}/favorites/{userId} {
       allow read: if isAuthenticated();
       allow write: if isSelf(userId) || isAdmin();
