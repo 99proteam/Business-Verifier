@@ -1,5 +1,6 @@
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 import { NextRequest } from "next/server";
 
 export class AuthApiError extends Error {
@@ -39,6 +40,17 @@ function isAdminEmail(email: string) {
   return adminEmails.includes(email.toLowerCase());
 }
 
+async function isAdminUidFromFirestore(uid: string) {
+  try {
+    const app = ensureFirebaseAdminApp();
+    const adminDoc = await getFirestore(app).doc(`admins/${uid}`).get();
+    if (!adminDoc.exists) return false;
+    return Boolean(adminDoc.data()?.active === true);
+  } catch {
+    return false;
+  }
+}
+
 function ensureFirebaseAdminApp() {
   if (getApps().length) {
     return getApps()[0];
@@ -76,11 +88,13 @@ export async function verifyRequestAuth(request: NextRequest): Promise<VerifiedR
     const decoded = await getAuth(app).verifyIdToken(token);
     const email = String(decoded.email ?? "");
     const name = String(decoded.name ?? "");
+    const adminFromDoc = await isAdminUidFromFirestore(decoded.uid);
+    const adminFromEmail = isAdminEmail(email);
     return {
       uid: decoded.uid,
       email,
       name,
-      isAdmin: isAdminEmail(email),
+      isAdmin: adminFromDoc || adminFromEmail,
     };
   } catch (error) {
     if (error instanceof AuthApiError) throw error;

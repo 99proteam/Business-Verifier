@@ -1,4 +1,4 @@
-﻿rules_version = '2';
+rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isAuthenticated() {
@@ -15,6 +15,50 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == uid;
     }
 
+    function isTicketParticipantData(data) {
+      return isAuthenticated() && (
+        (data.customerUid is string && data.customerUid == request.auth.uid) ||
+        (data.participantUids is list && request.auth.uid in data.participantUids)
+      );
+    }
+
+    function isTicketParticipant(ticketId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/supportTickets/$(ticketId)) &&
+        isTicketParticipantData(get(/databases/$(database)/documents/supportTickets/$(ticketId)).data);
+    }
+
+    function isPartnershipParticipant(dealId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/partnershipDeals/$(dealId)) &&
+        (
+          get(/databases/$(database)/documents/partnershipDeals/$(dealId)).data.participantUids is list &&
+          request.auth.uid in get(/databases/$(database)/documents/partnershipDeals/$(dealId)).data.participantUids
+        );
+    }
+
+    function isEmploymentOwnerWrite() {
+      return isAuthenticated() && (
+        (request.resource != null &&
+          request.resource.data.ownerUid is string &&
+          request.resource.data.ownerUid == request.auth.uid) ||
+        (resource != null &&
+          resource.data.ownerUid is string &&
+          resource.data.ownerUid == request.auth.uid)
+      );
+    }
+
+    function isPerformanceReviewerWrite() {
+      return isAuthenticated() && (
+        (request.resource != null &&
+          request.resource.data.reviewedByUid is string &&
+          request.resource.data.reviewedByUid == request.auth.uid) ||
+        (resource != null &&
+          resource.data.reviewedByUid is string &&
+          resource.data.reviewedByUid == request.auth.uid)
+      );
+    }
+
     function hasUserOwnership(data) {
       return (
         (data.ownerUid is string && data.ownerUid == request.auth.uid) ||
@@ -23,10 +67,12 @@ service cloud.firestore {
         (data.employeeUid is string && data.employeeUid == request.auth.uid) ||
         (data.followerUid is string && data.followerUid == request.auth.uid) ||
         (data.addedByUid is string && data.addedByUid == request.auth.uid) ||
+        (data.createdBy is string && data.createdBy == request.auth.uid) ||
         (data.senderUid is string && data.senderUid == request.auth.uid) ||
         (data.actorUid is string && data.actorUid == request.auth.uid) ||
         (data.businessOwnerUid is string && data.businessOwnerUid == request.auth.uid) ||
         (data.initiatorUid is string && data.initiatorUid == request.auth.uid) ||
+        (data.payerUid is string && data.payerUid == request.auth.uid) ||
         (data.targetUid is string && data.targetUid == request.auth.uid) ||
         (data.participantUids is list && request.auth.uid in data.participantUids)
       );
@@ -39,23 +85,212 @@ service cloud.firestore {
       );
     }
 
+    match /admins/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /userLookup/{uid} {
+      allow read: if isAuthenticated();
+      allow write: if isSelf(uid) || isAdmin();
+    }
+
     match /users/{userId} {
-      allow read: if true;
+      allow read: if isSelf(userId) || isAdmin();
       allow write: if isSelf(userId) || isAdmin();
     }
 
-    match /users/{userId}/{document=**} {
-      allow read: if true;
+    match /userSecurity/{userId} {
+      allow read: if isSelf(userId) || isAdmin();
       allow write: if isSelf(userId) || isAdmin();
+    }
+
+    match /users/{userId}/followedBusinesses/{businessId} {
+      allow read: if isSelf(userId) || isAdmin();
+      allow write: if isSelf(userId) || isAdmin();
+    }
+
+    match /users/{userId}/groupMemberships/{groupId} {
+      allow read: if isSelf(userId) || isAdmin();
+      allow write: if isSelf(userId) || isAdmin();
+    }
+
+    match /users/{userId}/notifications/{notificationId} {
+      allow read: if isSelf(userId) || isAdmin();
+      allow create: if isSelf(userId) || isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.ownerUid is string &&
+        request.resource.data.ownerUid == request.auth.uid
+      );
+      allow update, delete: if isSelf(userId) || isAdmin();
+    }
+
+    match /users/{userId}/employments/{employmentId} {
+      allow read: if isSelf(userId) || isAdmin() || (
+        isAuthenticated() &&
+        resource.data.ownerUid is string &&
+        resource.data.ownerUid == request.auth.uid
+      );
+      allow write: if isSelf(userId) || isAdmin() || isEmploymentOwnerWrite();
+    }
+
+    match /users/{userId}/performanceReviews/{reviewId} {
+      allow read: if isSelf(userId) || isAdmin() || (
+        isAuthenticated() &&
+        resource.data.reviewedByUid is string &&
+        resource.data.reviewedByUid == request.auth.uid
+      );
+      allow write: if isSelf(userId) || isAdmin() || isPerformanceReviewerWrite();
+    }
+
+    match /wallets/{userId} {
+      allow read, write: if isSelf(userId) || isAdmin();
+    }
+
+    match /wallets/{userId}/transactions/{txId} {
+      allow read, write: if isSelf(userId) || isAdmin();
+    }
+
+    match /supportTickets/{ticketId} {
+      allow read: if isAdmin() || isTicketParticipantData(resource.data);
+      allow create: if isAuthenticated() &&
+        request.resource.data.customerUid is string &&
+        request.resource.data.customerUid == request.auth.uid;
+      allow update, delete: if isAdmin() || isTicketParticipantData(resource.data);
+    }
+
+    match /supportTickets/{ticketId}/messages/{messageId} {
+      allow read: if isAdmin() || isTicketParticipant(ticketId);
+      allow create: if (isAdmin() || isTicketParticipant(ticketId)) &&
+        request.resource.data.senderUid is string &&
+        request.resource.data.senderUid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /notificationEndpoints/{endpointId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /notificationDeliveryLogs/{logId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /membershipBusinessPrograms/{programId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /membershipApiUsageBuckets/{bucketId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /paymentIntents/{intentId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /payouts/{payoutId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /withdrawalRequests/{requestId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /auditEvents/{eventId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.actorUid is string &&
+        request.resource.data.actorUid == request.auth.uid
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /automationJobRuns/{runId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /partnershipDeals/{dealId} {
+      allow read: if isAdmin() || isPartnershipParticipant(dealId);
+      allow create: if isAuthenticated() && ownsRecord();
+      allow update, delete: if isAdmin() || isPartnershipParticipant(dealId);
+    }
+
+    match /partnershipDeals/{dealId}/messages/{messageId} {
+      allow read: if isAdmin() || isPartnershipParticipant(dealId);
+      allow create: if (isAdmin() || isPartnershipParticipant(dealId)) &&
+        request.resource.data.senderUid is string &&
+        request.resource.data.senderUid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /businessApplications/{applicationId} {
+      allow read: if resource.data.status == "approved" ||
+        (isAuthenticated() && resource.data.ownerUid is string && resource.data.ownerUid == request.auth.uid) ||
+        isAdmin();
+      allow create: if isAuthenticated() &&
+        request.resource.data.ownerUid is string &&
+        request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.ownerUid is string &&
+        resource.data.ownerUid == request.auth.uid
+      );
+    }
+
+    match /digitalProducts/{productId} {
+      allow read: if true;
+      allow write: if isAdmin() || ownsRecord();
     }
 
     match /digitalProducts/{productId}/favorites/{userId} {
-      allow read: if true;
+      allow read: if isAuthenticated();
       allow write: if isSelf(userId) || isAdmin();
     }
 
-    match /{document=**} {
+    match /productReviews/{reviewId} {
       allow read: if true;
+      allow write: if isAdmin() || ownsRecord();
+    }
+
+    match /groups/{groupId} {
+      allow read: if true;
+      allow write: if isAdmin() || ownsRecord();
+    }
+
+    match /groups/{groupId}/messages/{messageId} {
+      allow read: if true;
+      allow write: if isAuthenticated() && (
+        isAdmin() ||
+        ownsRecord() ||
+        (request.resource != null &&
+          request.resource.data.senderUid is string &&
+          request.resource.data.senderUid == request.auth.uid)
+      );
+    }
+
+    match /platformSettings/{settingId} {
+      allow read: if settingId in ["homepage", "ads", "geoCatalog"] || isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /geoCatalogCountries/{countryId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /certificates/{certificateId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /adCampaigns/{campaignId} {
+      allow read: if resource.data.status == "active" || isAdmin() || ownsRecord();
+      allow write: if isAdmin() || ownsRecord();
+    }
+
+    match /{document=**} {
+      allow read: if isAdmin() || ownsRecord();
       allow write: if isAdmin() || ownsRecord();
     }
   }

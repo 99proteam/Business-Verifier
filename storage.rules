@@ -1,4 +1,4 @@
-﻿rules_version = '2';
+rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     function isAuthenticated() {
@@ -16,12 +16,12 @@ service firebase.storage {
     }
 
     match /support-evidence/{uid}/{allPaths=**} {
-      allow read: if true;
+      allow read: if isAuthenticated();
       allow write: if isSelf(uid) || isAdmin();
     }
 
     match /ticket-messages/{ticketId}/{uid}/{allPaths=**} {
-      allow read: if true;
+      allow read: if isAuthenticated();
       allow write: if isSelf(uid) || isAdmin();
     }
 
@@ -31,7 +31,7 @@ service firebase.storage {
     }
 
     match /order-refunds/{orderId}/{uid}/{allPaths=**} {
-      allow read: if true;
+      allow read: if isAuthenticated();
       allow write: if isSelf(uid) || isAdmin();
     }
 
@@ -41,7 +41,7 @@ service firebase.storage {
     }
 
     match /{allPaths=**} {
-      allow read: if true;
+      allow read: if isAuthenticated() || isAdmin();
       allow write: if isAdmin();
     }
   }

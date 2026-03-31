@@ -4,6 +4,7 @@ import {
   arrayUnion,
   collection,
   collectionGroup,
+  deleteField,
   deleteDoc,
   doc,
   getDoc,
@@ -46,11 +47,52 @@ function toSlug(text: string) {
     .replace(/(^-|-$)/g, "");
 }
 
+function normalizeHttpUrl(raw: string) {
+  const value = raw.trim();
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
 function getDb() {
   if (!db) {
     throw new Error("Firebase is not configured. Add NEXT_PUBLIC_FIREBASE_* values.");
   }
   return db;
+}
+
+function userLookupRef(database: ReturnType<typeof getDb>, uid: string) {
+  return doc(database, "userLookup", uid);
+}
+
+async function syncUserLookupRecord(
+  payload: {
+    uid: string;
+    email: string;
+    displayName: string;
+    publicId: string;
+    role: string;
+  },
+) {
+  const database = getDb();
+  await setDoc(
+    userLookupRef(database, payload.uid),
+    {
+      uid: payload.uid,
+      email: payload.email,
+      emailNormalized: payload.email.trim().toLowerCase(),
+      displayName: payload.displayName,
+      publicId: payload.publicId,
+      role: payload.role,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 }
 
 function sanitizeAuditMetadata(
@@ -584,6 +626,14 @@ export async function ensureUserProfile(user: User) {
     await updateDoc(userRef, basePayload);
   }
 
+  await syncUserLookupRecord({
+    uid: user.uid,
+    email: user.email ?? "",
+    displayName: user.displayName ?? "User",
+    publicId: `BVU-${user.uid.slice(0, 8).toUpperCase()}`,
+    role: existing.exists() ? String(existing.data().role ?? "customer") : "customer",
+  });
+
   if (!walletSnapshot.exists()) {
     await setDoc(walletRef, {
       ownerUid: user.uid,
@@ -888,8 +938,8 @@ function normalizeHomeMediaItems(raw: unknown): HomeMediaItemRecord[] {
     .map((entry) => {
       const row = entry as Record<string, unknown>;
       const title = String(row.title ?? "").trim();
-      const mediaUrl = String(row.mediaUrl ?? "").trim();
-      const redirectUrl = String(row.redirectUrl ?? "").trim();
+      const mediaUrl = normalizeHttpUrl(String(row.mediaUrl ?? ""));
+      const redirectUrl = normalizeHttpUrl(String(row.redirectUrl ?? ""));
       if (!mediaUrl || !redirectUrl) return null;
       return {
         title: title || "Media",
@@ -926,10 +976,6 @@ export async function fetchHomePageSettings() {
   const ref = doc(database, "platformSettings", "homepage");
   const snapshot = await getDoc(ref);
   if (!snapshot.exists()) {
-    await setDoc(ref, {
-      ...homePageDefaults,
-      updatedAt: serverTimestamp(),
-    });
     return homePageDefaults;
   }
   return mapHomePageSettings(snapshot.data());
@@ -1585,17 +1631,6 @@ function parseAuthenticatorData(data: Record<string, unknown>) {
   };
 }
 
-function mapAuthenticatorSettings(data: Record<string, unknown>) {
-  const auth = parseAuthenticatorData(data);
-  return {
-    enabled: auth.enabled,
-    hasPendingEnrollment: Boolean(auth.pendingSecret),
-    backupCodesRemaining: auth.backupCodes.length,
-    enrolledAt: auth.enrolledAt,
-    updatedAt: auth.updatedAt,
-  } satisfies AuthenticatorSettingsRecord;
-}
-
 async function getUserIdentityProfileOrThrow(userUid: string) {
   const database = getDb();
   const snapshot = await getDoc(doc(database, "users", userUid));
@@ -1611,7 +1646,7 @@ async function findUserByEmail(emailInput: string) {
   const normalized = email.toLowerCase();
 
   const byNormalized = await getDocs(
-    query(collection(database, "users"), where("emailNormalized", "==", normalized), limit(1)),
+    query(collection(database, "userLookup"), where("emailNormalized", "==", normalized), limit(1)),
   );
   const firstNormalized = byNormalized.docs[0];
   if (firstNormalized) {
@@ -1625,7 +1660,7 @@ async function findUserByEmail(emailInput: string) {
   }
 
   const byLowerEmail = await getDocs(
-    query(collection(database, "users"), where("email", "==", normalized), limit(1)),
+    query(collection(database, "userLookup"), where("email", "==", normalized), limit(1)),
   );
   const firstLowerEmail = byLowerEmail.docs[0];
   if (firstLowerEmail) {
@@ -1639,7 +1674,7 @@ async function findUserByEmail(emailInput: string) {
   }
 
   const byRawEmail = await getDocs(
-    query(collection(database, "users"), where("email", "==", email), limit(1)),
+    query(collection(database, "userLookup"), where("email", "==", email), limit(1)),
   );
   const firstRawEmail = byRawEmail.docs[0];
   if (!firstRawEmail) return null;
@@ -1738,6 +1773,13 @@ export async function addBusinessEmployee(payload: {
     await updateDoc(doc(database, "users", employee.uid), {
       role: "employee",
       updatedAt: serverTimestamp(),
+    });
+    await syncUserLookupRecord({
+      uid: employee.uid,
+      email: employee.email,
+      displayName: employee.displayName,
+      publicId: `BVU-${employee.uid.slice(0, 8).toUpperCase()}`,
+      role: "employee",
     });
   }
 }
@@ -1976,17 +2018,60 @@ export async function adminSetUserIdentityVerification(payload: {
   });
 }
 
-export async function fetchAuthenticatorSettings(userUid: string) {
+function userSecurityRef(database: ReturnType<typeof getDb>, userUid: string) {
+  return doc(database, "userSecurity", userUid);
+}
+
+async function readAuthenticatorState(userUid: string) {
   const database = getDb();
-  const snapshot = await getDoc(doc(database, "users", userUid));
-  if (!snapshot.exists()) {
+  const securitySnapshot = await getDoc(userSecurityRef(database, userUid));
+  if (securitySnapshot.exists()) {
+    return parseAuthenticatorData(securitySnapshot.data());
+  }
+  const userSnapshot = await getDoc(doc(database, "users", userUid));
+  if (!userSnapshot.exists()) {
     throw new Error("User profile not found.");
   }
-  return mapAuthenticatorSettings(snapshot.data());
+  return parseAuthenticatorData(userSnapshot.data());
+}
+
+async function writeAuthenticatorState(
+  payload: {
+    userUid: string;
+    authenticator: Record<string, unknown>;
+  },
+) {
+  const database = getDb();
+  await setDoc(
+    userSecurityRef(database, payload.userUid),
+    {
+      authenticator: payload.authenticator,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+  await setDoc(
+    doc(database, "users", payload.userUid),
+    {
+      authenticator: deleteField(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+export async function fetchAuthenticatorSettings(userUid: string) {
+  const state = await readAuthenticatorState(userUid);
+  return {
+    enabled: state.enabled,
+    hasPendingEnrollment: Boolean(state.pendingSecret),
+    backupCodesRemaining: state.backupCodes.length,
+    enrolledAt: state.enrolledAt,
+    updatedAt: state.updatedAt,
+  } satisfies AuthenticatorSettingsRecord;
 }
 
 export async function initiateAuthenticatorEnrollment(userUid: string) {
-  const database = getDb();
   const profile = await getUserIdentityProfileOrThrow(userUid);
   const secret = generateRandomBase32Secret(32);
   const backupCodes = generateBackupCodes(8, 10);
@@ -1997,19 +2082,15 @@ export async function initiateAuthenticatorEnrollment(userUid: string) {
     issuer: "Business Verifier",
   });
 
-  await setDoc(
-    doc(database, "users", userUid),
-    {
-      authenticator: {
-        enabled: false,
-        pendingSecret: secret,
-        pendingBackupCodes: backupCodes,
-        updatedAt: serverTimestamp(),
-      },
+  await writeAuthenticatorState({
+    userUid,
+    authenticator: {
+      enabled: false,
+      pendingSecret: secret,
+      pendingBackupCodes: backupCodes,
       updatedAt: serverTimestamp(),
     },
-    { merge: true },
-  );
+  });
 
   return {
     secret,
@@ -2023,12 +2104,7 @@ export async function confirmAuthenticatorEnrollment(payload: {
   userUid: string;
   code: string;
 }) {
-  const database = getDb();
-  const snapshot = await getDoc(doc(database, "users", payload.userUid));
-  if (!snapshot.exists()) {
-    throw new Error("User profile not found.");
-  }
-  const auth = parseAuthenticatorData(snapshot.data());
+  const auth = await readAuthenticatorState(payload.userUid);
   if (!auth.pendingSecret) {
     throw new Error("No authenticator enrollment is pending.");
   }
@@ -2042,34 +2118,25 @@ export async function confirmAuthenticatorEnrollment(payload: {
     throw new Error("Invalid authenticator code.");
   }
 
-  await setDoc(
-    doc(database, "users", payload.userUid),
-    {
-      authenticator: {
-        enabled: true,
-        secret: auth.pendingSecret,
-        backupCodes: auth.pendingBackupCodes,
-        pendingSecret: null,
-        pendingBackupCodes: [],
-        enrolledAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      },
+  await writeAuthenticatorState({
+    userUid: payload.userUid,
+    authenticator: {
+      enabled: true,
+      secret: auth.pendingSecret,
+      backupCodes: auth.pendingBackupCodes,
+      pendingSecret: null,
+      pendingBackupCodes: [],
+      enrolledAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     },
-    { merge: true },
-  );
+  });
 }
 
 export async function verifyAuthenticatorChallenge(payload: {
   userUid: string;
   code: string;
 }) {
-  const database = getDb();
-  const snapshot = await getDoc(doc(database, "users", payload.userUid));
-  if (!snapshot.exists()) {
-    throw new Error("User profile not found.");
-  }
-  const auth = parseAuthenticatorData(snapshot.data());
+  const auth = await readAuthenticatorState(payload.userUid);
   if (!auth.enabled || !auth.secret) {
     return true;
   }
@@ -2083,17 +2150,14 @@ export async function verifyAuthenticatorChallenge(payload: {
     const remaining = auth.backupCodes.filter(
       (item) => normalizeBackupCode(item) !== normalizedBackup,
     );
-    await setDoc(
-      doc(database, "users", payload.userUid),
-      {
-        authenticator: {
-          backupCodes: remaining,
-          updatedAt: serverTimestamp(),
-        },
+    await writeAuthenticatorState({
+      userUid: payload.userUid,
+      authenticator: {
+        ...auth,
+        backupCodes: remaining,
         updatedAt: serverTimestamp(),
       },
-      { merge: true },
-    );
+    });
     return true;
   }
 
@@ -2114,53 +2178,42 @@ export async function disableAuthenticatorForUser(payload: {
   userUid: string;
   code: string;
 }) {
-  const database = getDb();
   const settings = await fetchAuthenticatorSettings(payload.userUid);
   if (!settings.enabled) return;
   await ensureAuthenticatorFactor({ userUid: payload.userUid, code: payload.code });
 
-  await setDoc(
-    doc(database, "users", payload.userUid),
-    {
-      authenticator: {
-        enabled: false,
-        secret: null,
-        backupCodes: [],
-        pendingSecret: null,
-        pendingBackupCodes: [],
-        updatedAt: serverTimestamp(),
-      },
+  await writeAuthenticatorState({
+    userUid: payload.userUid,
+    authenticator: {
+      enabled: false,
+      secret: null,
+      backupCodes: [],
+      pendingSecret: null,
+      pendingBackupCodes: [],
       updatedAt: serverTimestamp(),
     },
-    { merge: true },
-  );
+  });
 }
 
 export async function regenerateAuthenticatorBackupCodes(payload: {
   userUid: string;
   code: string;
 }) {
-  const database = getDb();
-  const snapshot = await getDoc(doc(database, "users", payload.userUid));
-  if (!snapshot.exists()) throw new Error("User profile not found.");
-  const auth = parseAuthenticatorData(snapshot.data());
+  const auth = await readAuthenticatorState(payload.userUid);
   if (!auth.enabled || !auth.secret) {
     throw new Error("Authenticator is not enabled.");
   }
 
   await ensureAuthenticatorFactor({ userUid: payload.userUid, code: payload.code });
   const nextCodes = generateBackupCodes(8, 10);
-  await setDoc(
-    doc(database, "users", payload.userUid),
-    {
-      authenticator: {
-        backupCodes: nextCodes,
-        updatedAt: serverTimestamp(),
-      },
+  await writeAuthenticatorState({
+    userUid: payload.userUid,
+    authenticator: {
+      ...auth,
+      backupCodes: nextCodes,
       updatedAt: serverTimestamp(),
     },
-    { merge: true },
-  );
+  });
   return nextCodes;
 }
 
@@ -3795,11 +3848,6 @@ async function getWithdrawalSettings() {
   const settingsRef = doc(database, "platformSettings", "finance");
   const snapshot = await getDoc(settingsRef);
   if (!snapshot.exists()) {
-    await setDoc(settingsRef, {
-      withdrawalFeePercent: 2,
-      withdrawalFlatFee: 10,
-      updatedAt: serverTimestamp(),
-    });
     return {
       withdrawalFeePercent: 2,
       withdrawalFlatFee: 10,
@@ -5249,7 +5297,7 @@ function mapUserNotification(snapshotId: string, data: Record<string, unknown>) 
 async function getUserUidByPublicId(publicId: string) {
   const database = getDb();
   const snapshots = await getDocs(
-    query(collection(database, "users"), where("publicId", "==", publicId), limit(1)),
+    query(collection(database, "userLookup"), where("publicId", "==", publicId), limit(1)),
   );
   const row = snapshots.docs[0];
   return row ? row.id : null;
@@ -5562,11 +5610,6 @@ export async function fetchNotificationApiCharges() {
   const ref = doc(database, "platformSettings", "notificationApi");
   const snapshot = await getDoc(ref);
   if (!snapshot.exists()) {
-    await setDoc(ref, {
-      monthlyBaseFee: 99,
-      per1000MessagesFee: 25,
-      updatedAt: serverTimestamp(),
-    });
     return {
       monthlyBaseFee: 99,
       per1000MessagesFee: 25,
@@ -5701,15 +5744,6 @@ export async function fetchAdPricingSettings() {
     const defaultTagPlans: AdTagPlanRecord[] = [
       { name: "recommended", monthlyPrice: 499, yearlyPrice: 4990 },
     ];
-    await setDoc(ref, {
-      homeBannerCpm: 120,
-      directoryBannerCpm: 80,
-      recommendedTagMonthly: 499,
-      recommendedTagYearly: 4990,
-      customTagPlans: defaultTagPlans,
-      cityTargetingSurchargePercent: 10,
-      updatedAt: serverTimestamp(),
-    });
     return {
       homeBannerCpm: 120,
       directoryBannerCpm: 80,
@@ -5776,13 +5810,18 @@ export async function createAdCampaign(payload: {
   if (!canCreate) {
     throw new Error("Only business users can create ad campaigns.");
   }
+  const normalizedImageUrl = normalizeHttpUrl(payload.imageUrl);
+  const normalizedDestinationUrl = normalizeHttpUrl(payload.destinationUrl);
+  if (!normalizedImageUrl || !normalizedDestinationUrl) {
+    throw new Error("Ad campaign requires valid http/https image and destination URLs.");
+  }
 
   const ref = await addDoc(collection(database, "adCampaigns"), {
     ownerUid: payload.ownerUid,
     ownerName: payload.ownerName,
     title: payload.title,
-    imageUrl: payload.imageUrl,
-    destinationUrl: payload.destinationUrl,
+    imageUrl: normalizedImageUrl,
+    destinationUrl: normalizedDestinationUrl,
     placement: payload.placement,
     cityTargets: payload.cityTargets,
     tagPlanName: payload.tagPlanName ?? null,
@@ -6050,10 +6089,6 @@ export async function fetchBillingSettings() {
   const ref = doc(database, "platformSettings", "billing");
   const snapshot = await getDoc(ref);
   if (!snapshot.exists()) {
-    await setDoc(ref, {
-      ...billingDefaults,
-      updatedAt: serverTimestamp(),
-    });
     return billingDefaults;
   }
   return {
@@ -7018,10 +7053,6 @@ export async function fetchMembershipEconomicsSettings() {
   const ref = doc(database, "platformSettings", "membershipEconomics");
   const snapshot = await getDoc(ref);
   if (!snapshot.exists()) {
-    await setDoc(ref, {
-      ...membershipEconomicsDefaults,
-      updatedAt: serverTimestamp(),
-    });
     return membershipEconomicsDefaults;
   }
   return {
