@@ -53,6 +53,7 @@ export function PublicBusinessProfile({
         <p className="mt-2 text-sm text-muted">
           {business.mode} business | {business.city}, {business.country} | {business.category}
         </p>
+        <p className="mt-1 text-xs text-muted">Business key: {business.publicBusinessKey}</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <article className="rounded-2xl border border-border bg-surface p-3">
             <p className="text-xs text-muted">Trust score</p>

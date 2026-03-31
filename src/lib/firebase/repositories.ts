@@ -47,6 +47,18 @@ function toSlug(text: string) {
     .replace(/(^-|-$)/g, "");
 }
 
+function randomKeyFragment(length = 8) {
+  return Math.random().toString(36).slice(2, 2 + length).toUpperCase();
+}
+
+function generateBusinessPublicKey() {
+  return `BVB-${randomKeyFragment(4)}-${randomKeyFragment(4)}`;
+}
+
+function generateBusinessEmployeeJoinKey() {
+  return `BVJ-${randomKeyFragment(6)}-${randomKeyFragment(6)}`;
+}
+
 function normalizeHttpUrl(raw: string) {
   const value = raw.trim();
   if (!value) return "";
@@ -245,6 +257,8 @@ export interface BusinessApplicationRecord extends BusinessApplicationInput {
   id: string;
   ownerUid: string;
   slug: string;
+  publicBusinessKey: string;
+  employeeJoinKey?: string;
   status: "pending" | "approved" | "rejected";
   isRecommended?: boolean;
   recommendedMarkedBy?: string;
@@ -324,6 +338,30 @@ export interface BusinessEmployeeRecord {
   createdAt: string;
 }
 
+export type EmployeeAccessRequestStatus =
+  | "pending"
+  | "hold"
+  | "approved"
+  | "auto_approved"
+  | "declined";
+
+export interface EmployeeAccessRequestRecord {
+  employeeUid: string;
+  employeeName: string;
+  employeeEmail: string;
+  businessId: string;
+  businessName: string;
+  businessSlug: string;
+  businessPublicKey: string;
+  status: EmployeeAccessRequestStatus;
+  note?: string;
+  autoApproved: boolean;
+  reviewedByUid?: string;
+  reviewedByName?: string;
+  requestedAt: string;
+  updatedAt: string;
+}
+
 export interface EmployeeAssignmentRecord {
   businessId: string;
   businessName: string;
@@ -361,6 +399,7 @@ export interface UserIdentityProfileRecord {
   email: string;
   publicId: string;
   role: string;
+  roleSelectionCompleted: boolean;
   isIdentityVerified: boolean;
   createdAt: string;
   updatedAt: string;
@@ -534,6 +573,8 @@ function mapBusinessApplication(snapshotId: string, data: Record<string, unknown
       ? Number(data.proDepositLockMonths)
       : undefined,
     slug: String(data.slug ?? toSlug(String(data.businessName ?? snapshotId))),
+    publicBusinessKey: String(data.publicBusinessKey ?? `BVB-${snapshotId.slice(0, 8).toUpperCase()}`),
+    employeeJoinKey: data.employeeJoinKey ? String(data.employeeJoinKey) : undefined,
     status: (data.status as BusinessApplicationRecord["status"]) ?? "pending",
     isRecommended: Boolean(data.isRecommended),
     recommendedMarkedBy: data.recommendedMarkedBy
@@ -592,10 +633,30 @@ async function fetchPrimaryBusinessByOwner(ownerUid: string) {
   const snapshots = await getDocs(
     query(collection(database, "businessApplications"), where("ownerUid", "==", ownerUid), limit(40)),
   );
-  const rows = snapshots.docs.map((snapshot) => mapBusinessApplication(snapshot.id, snapshot.data()));
+  const rows = await Promise.all(
+    snapshots.docs.map(async (snapshot) => {
+      const raw = snapshot.data();
+      if (!raw.publicBusinessKey || !raw.employeeJoinKey) {
+        await updateDoc(doc(database, "businessApplications", snapshot.id), {
+          publicBusinessKey: raw.publicBusinessKey || generateBusinessPublicKey(),
+          employeeJoinKey: raw.employeeJoinKey || generateBusinessEmployeeJoinKey(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return mapBusinessApplication(snapshot.id, {
+        ...raw,
+        publicBusinessKey: raw.publicBusinessKey || `BVB-${snapshot.id.slice(0, 8).toUpperCase()}`,
+        employeeJoinKey: raw.employeeJoinKey || null,
+      });
+    }),
+  );
   if (!rows.length) return null;
   const approved = rows.find((row) => row.status === "approved");
   return approved ?? rows.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
+}
+
+export async function fetchOwnedBusinessProfile(ownerUid: string) {
+  return fetchPrimaryBusinessByOwner(ownerUid);
 }
 
 export async function ensureUserProfile(user: User) {
@@ -619,6 +680,7 @@ export async function ensureUserProfile(user: User) {
     await setDoc(userRef, {
       ...basePayload,
       role: "customer",
+      roleSelectionCompleted: false,
       isIdentityVerified: false,
       createdAt: serverTimestamp(),
     });
@@ -661,6 +723,8 @@ export async function createBusinessApplication(
     proDepositLockMonths: lockMonths ?? null,
     ownerUid,
     slug: toSlug(input.businessName),
+    publicBusinessKey: generateBusinessPublicKey(),
+    employeeJoinKey: generateBusinessEmployeeJoinKey(),
     status: "pending" as const,
     isRecommended: false,
     recommendedMarkedBy: null,
@@ -864,12 +928,18 @@ export async function fetchPublicBusinessDirectory() {
       limit(300),
     ),
   );
-  return snapshots.docs
-    .map((snapshot) => mapBusinessApplication(snapshot.id, snapshot.data()))
-    .sort((a, b) => {
-      if (b.trustScore !== a.trustScore) return b.trustScore - a.trustScore;
-      return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-    });
+  const rows = snapshots.docs.map((snapshot) =>
+    mapBusinessApplication(snapshot.id, {
+      ...snapshot.data(),
+      publicBusinessKey:
+        snapshot.data().publicBusinessKey || `BVB-${snapshot.id.slice(0, 8).toUpperCase()}`,
+      employeeJoinKey: snapshot.data().employeeJoinKey || null,
+    }),
+  );
+  return rows.sort((a, b) => {
+    if (b.trustScore !== a.trustScore) return b.trustScore - a.trustScore;
+    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  });
 }
 
 export type HomeBusinessMode = "new" | "recommended" | "both";
@@ -1663,6 +1733,7 @@ function mapUserIdentityProfile(
     email: String(data.email ?? ""),
     publicId: String(data.publicId ?? `BVU-${snapshotId.slice(0, 8).toUpperCase()}`),
     role: String(data.role ?? "customer"),
+    roleSelectionCompleted: Boolean(data.roleSelectionCompleted),
     isIdentityVerified: Boolean(data.isIdentityVerified),
     createdAt: toISODate(data.createdAt),
     updatedAt: toISODate(data.updatedAt),
@@ -1776,13 +1847,298 @@ export async function fetchBusinessEmployees(ownerUid: string) {
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
+export async function fetchBusinessByPublicKey(publicBusinessKey: string) {
+  const key = publicBusinessKey.trim().toUpperCase();
+  if (!key) return null;
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "businessApplications"),
+      where("publicBusinessKey", "==", key),
+      limit(1),
+    ),
+  );
+  const row = snapshots.docs[0];
+  if (!row) return null;
+  return mapBusinessApplication(row.id, row.data());
+}
+
+async function attachEmployeeToBusiness(payload: {
+  business: BusinessApplicationRecord;
+  ownerUid: string;
+  ownerName: string;
+  employee: UserLookupResult;
+  title?: string;
+}) {
+  const database = getDb();
+  const employeeRef = doc(
+    database,
+    "businessApplications",
+    payload.business.id,
+    "employees",
+    payload.employee.uid,
+  );
+  const existing = await getDoc(employeeRef);
+  if (existing.exists()) {
+    return false;
+  }
+  const employeeTitle = payload.title?.trim() || "Team member";
+  await setDoc(employeeRef, {
+    employeeUid: payload.employee.uid,
+    employeeName: payload.employee.displayName,
+    employeeEmail: payload.employee.email,
+    title: employeeTitle,
+    addedByUid: payload.ownerUid,
+    addedByName: payload.ownerName,
+    createdAt: serverTimestamp(),
+  });
+  await setDoc(doc(database, "users", payload.employee.uid, "employments", payload.business.id), {
+    businessId: payload.business.id,
+    businessName: payload.business.businessName,
+    businessSlug: payload.business.slug,
+    ownerUid: payload.business.ownerUid,
+    ownerName: payload.ownerName,
+    title: employeeTitle,
+    assignedAt: serverTimestamp(),
+  });
+
+  await updateDoc(doc(database, "users", payload.employee.uid), {
+    role: "employee",
+    roleSelectionCompleted: true,
+    updatedAt: serverTimestamp(),
+  });
+  await syncUserLookupRecord({
+    uid: payload.employee.uid,
+    email: payload.employee.email,
+    displayName: payload.employee.displayName,
+    publicId: `BVU-${payload.employee.uid.slice(0, 8).toUpperCase()}`,
+    role: "employee",
+  });
+  return true;
+}
+
+function mapEmployeeAccessRequest(
+  snapshotId: string,
+  data: Record<string, unknown>,
+): EmployeeAccessRequestRecord {
+  return {
+    employeeUid: snapshotId,
+    employeeName: String(data.employeeName ?? "Employee"),
+    employeeEmail: String(data.employeeEmail ?? ""),
+    businessId: String(data.businessId ?? ""),
+    businessName: String(data.businessName ?? ""),
+    businessSlug: String(data.businessSlug ?? ""),
+    businessPublicKey: String(data.businessPublicKey ?? ""),
+    status: (data.status as EmployeeAccessRequestStatus) ?? "pending",
+    note: data.note ? String(data.note) : undefined,
+    autoApproved: Boolean(data.autoApproved),
+    reviewedByUid: data.reviewedByUid ? String(data.reviewedByUid) : undefined,
+    reviewedByName: data.reviewedByName ? String(data.reviewedByName) : undefined,
+    requestedAt: toISODate(data.requestedAt),
+    updatedAt: toISODate(data.updatedAt),
+  };
+}
+
+export async function regenerateBusinessEmployeeJoinKey(ownerUid: string) {
+  const database = getDb();
+  const business = await fetchPrimaryBusinessByOwner(ownerUid);
+  if (!business) throw new Error("Business profile not found.");
+  const nextKey = generateBusinessEmployeeJoinKey();
+  await updateDoc(doc(database, "businessApplications", business.id), {
+    employeeJoinKey: nextKey,
+    updatedAt: serverTimestamp(),
+  });
+  return nextKey;
+}
+
+export async function requestEmployeeBusinessAccess(payload: {
+  employeeUid: string;
+  employeeName: string;
+  employeeEmail: string;
+  businessPublicKey: string;
+  privateJoinKey?: string;
+  title?: string;
+}) {
+  const database = getDb();
+  const business = await fetchBusinessByPublicKey(payload.businessPublicKey);
+  if (!business || business.status !== "approved") {
+    throw new Error("Business not found with this key.");
+  }
+  if (business.ownerUid === payload.employeeUid) {
+    throw new Error("Business owner cannot request as employee.");
+  }
+
+  const employeeProfile = await getUserIdentityProfileOrThrow(payload.employeeUid);
+  const employee: UserLookupResult = {
+    uid: employeeProfile.uid,
+    email: employeeProfile.email,
+    displayName: employeeProfile.displayName,
+    role: employeeProfile.role,
+  };
+  const requestRef = doc(
+    database,
+    "businessApplications",
+    business.id,
+    "employeeRequests",
+    payload.employeeUid,
+  );
+
+  const providedKey = payload.privateJoinKey?.trim() ?? "";
+  const canAutoApprove =
+    Boolean(business.employeeJoinKey) && providedKey === String(business.employeeJoinKey);
+
+  if (canAutoApprove) {
+    await attachEmployeeToBusiness({
+      business,
+      ownerUid: business.ownerUid,
+      ownerName: business.businessName,
+      employee,
+      title: payload.title,
+    });
+    await setDoc(
+      requestRef,
+      {
+        employeeUid: payload.employeeUid,
+        employeeName: payload.employeeName,
+        employeeEmail: payload.employeeEmail,
+        businessId: business.id,
+        businessName: business.businessName,
+        businessSlug: business.slug,
+        businessPublicKey: business.publicBusinessKey,
+        status: "auto_approved",
+        note: "Auto-approved using valid private business key.",
+        autoApproved: true,
+        reviewedByUid: business.ownerUid,
+        reviewedByName: business.businessName,
+        requestedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+    return {
+      status: "auto_approved" as const,
+      businessName: business.businessName,
+      businessSlug: business.slug,
+    };
+  }
+
+  await setDoc(
+    requestRef,
+    {
+      employeeUid: payload.employeeUid,
+      employeeName: payload.employeeName,
+      employeeEmail: payload.employeeEmail,
+      businessId: business.id,
+      businessName: business.businessName,
+      businessSlug: business.slug,
+      businessPublicKey: business.publicBusinessKey,
+      status: "pending",
+      note: "Awaiting business owner review.",
+      autoApproved: false,
+      requestedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+  await updateDoc(doc(database, "users", payload.employeeUid), {
+    role: "employee",
+    roleSelectionCompleted: true,
+    updatedAt: serverTimestamp(),
+  });
+  await syncUserLookupRecord({
+    uid: payload.employeeUid,
+    email: payload.employeeEmail,
+    displayName: payload.employeeName,
+    publicId: `BVU-${payload.employeeUid.slice(0, 8).toUpperCase()}`,
+    role: "employee",
+  });
+  return {
+    status: "pending" as const,
+    businessName: business.businessName,
+    businessSlug: business.slug,
+  };
+}
+
+export async function fetchBusinessEmployeeRequests(ownerUid: string) {
+  const database = getDb();
+  const business = await fetchPrimaryBusinessByOwner(ownerUid);
+  if (!business) return [];
+  const snapshots = await getDocs(
+    query(
+      collection(database, "businessApplications", business.id, "employeeRequests"),
+      limit(300),
+    ),
+  );
+  return snapshots.docs
+    .map((snapshot) => mapEmployeeAccessRequest(snapshot.id, snapshot.data()))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+export async function reviewBusinessEmployeeRequest(payload: {
+  ownerUid: string;
+  ownerName: string;
+  employeeUid: string;
+  action: "approve" | "hold" | "decline";
+  note?: string;
+  title?: string;
+}) {
+  const database = getDb();
+  const business = await fetchPrimaryBusinessByOwner(payload.ownerUid);
+  if (!business) throw new Error("Business profile not found.");
+
+  const requestRef = doc(
+    database,
+    "businessApplications",
+    business.id,
+    "employeeRequests",
+    payload.employeeUid,
+  );
+  const requestSnapshot = await getDoc(requestRef);
+  if (!requestSnapshot.exists()) {
+    throw new Error("Employee request not found.");
+  }
+  const request = mapEmployeeAccessRequest(requestSnapshot.id, requestSnapshot.data());
+  if (payload.action === "approve") {
+    const employee = await findUserByEmail(request.employeeEmail);
+    if (!employee) {
+      throw new Error("Employee account no longer exists.");
+    }
+    await attachEmployeeToBusiness({
+      business,
+      ownerUid: payload.ownerUid,
+      ownerName: payload.ownerName,
+      employee,
+      title: payload.title,
+    });
+    await updateDoc(requestRef, {
+      status: "approved",
+      note: payload.note?.trim() || "Approved by business owner.",
+      autoApproved: false,
+      reviewedByUid: payload.ownerUid,
+      reviewedByName: payload.ownerName,
+      updatedAt: serverTimestamp(),
+    });
+    return;
+  }
+  await updateDoc(requestRef, {
+    status: payload.action === "hold" ? "hold" : "declined",
+    note:
+      payload.note?.trim() ||
+      (payload.action === "hold"
+        ? "Request placed on hold."
+        : "Request declined by business owner."),
+    reviewedByUid: payload.ownerUid,
+    reviewedByName: payload.ownerName,
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function addBusinessEmployee(payload: {
   ownerUid: string;
   ownerName: string;
   employeeEmail: string;
   title?: string;
 }) {
-  const database = getDb();
   const business = await fetchPrimaryBusinessByOwner(payload.ownerUid);
   if (!business) {
     throw new Error("Complete business onboarding before adding employees.");
@@ -1798,51 +2154,15 @@ export async function addBusinessEmployee(payload: {
     throw new Error("Business owner is already part of this business.");
   }
 
-  const employeeRef = doc(
-    database,
-    "businessApplications",
-    business.id,
-    "employees",
-    employee.uid,
-  );
-  const existing = await getDoc(employeeRef);
-  if (existing.exists()) {
-    throw new Error("This account is already added as an employee.");
-  }
-
-  const employeeTitle = payload.title?.trim() || "Team member";
-  await setDoc(employeeRef, {
-    employeeUid: employee.uid,
-    employeeName: employee.displayName,
-    employeeEmail: employee.email,
-    title: employeeTitle,
-    addedByUid: payload.ownerUid,
-    addedByName: payload.ownerName,
-    createdAt: serverTimestamp(),
-  });
-
-  await setDoc(doc(database, "users", employee.uid, "employments", business.id), {
-    businessId: business.id,
-    businessName: business.businessName,
-    businessSlug: business.slug,
-    ownerUid: business.ownerUid,
+  const attached = await attachEmployeeToBusiness({
+    business,
+    ownerUid: payload.ownerUid,
     ownerName: payload.ownerName,
-    title: employeeTitle,
-    assignedAt: serverTimestamp(),
+    employee,
+    title: payload.title,
   });
-
-  if (employee.role === "customer") {
-    await updateDoc(doc(database, "users", employee.uid), {
-      role: "employee",
-      updatedAt: serverTimestamp(),
-    });
-    await syncUserLookupRecord({
-      uid: employee.uid,
-      email: employee.email,
-      displayName: employee.displayName,
-      publicId: `BVU-${employee.uid.slice(0, 8).toUpperCase()}`,
-      role: "employee",
-    });
+  if (!attached) {
+    throw new Error("This account is already added as an employee.");
   }
 }
 
@@ -2035,6 +2355,40 @@ export async function fetchEmployeePerformanceForEmployee(employeeUid: string) {
 
 export async function fetchCurrentUserIdentityProfile(userUid: string) {
   return getUserIdentityProfileOrThrow(userUid);
+}
+
+export async function updateCurrentUserRoleSelection(payload: {
+  userUid: string;
+  role: "customer" | "employee" | "business_owner";
+}) {
+  const profile = await getUserIdentityProfileOrThrow(payload.userUid);
+  const database = getDb();
+  const userRef = doc(database, "users", payload.userUid);
+  await updateDoc(userRef, {
+    role: payload.role,
+    roleSelectionCompleted: true,
+    updatedAt: serverTimestamp(),
+  });
+  await syncUserLookupRecord({
+    uid: payload.userUid,
+    email: profile.email,
+    displayName: profile.displayName,
+    publicId: profile.publicId,
+    role: payload.role,
+  });
+}
+
+export async function fetchCurrentUserNavigationContext(userUid: string) {
+  const database = getDb();
+  const [profile, adminSnapshot] = await Promise.all([
+    getUserIdentityProfileOrThrow(userUid),
+    getDoc(doc(database, "admins", userUid)),
+  ]);
+  return {
+    role: profile.role,
+    roleSelectionCompleted: profile.roleSelectionCompleted,
+    isAdmin: adminSnapshot.exists() && Boolean(adminSnapshot.data().active),
+  };
 }
 
 export async function fetchIdentityProfilesForAdmin() {
@@ -2606,6 +2960,11 @@ export interface DigitalProductRecord extends DigitalProductInput {
   ownerTrustScore: number;
   ownerCertificateSerial?: string;
   ownerBusinessSlug?: string;
+  externalSource?: CatalogIntegrationProvider;
+  externalProductId?: string;
+  stockAvailable?: number;
+  externalStoreUrl?: string;
+  lastSyncedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -2631,8 +2990,51 @@ export interface BusinessServiceRecord extends BusinessServiceInput {
   ownerBusinessSlug?: string;
   ownerTrustScore: number;
   ownerCertificateSerial?: string;
+  externalSource?: CatalogIntegrationProvider;
+  externalProductId?: string;
+  stockAvailable?: number;
+  externalStoreUrl?: string;
+  lastSyncedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type CatalogIntegrationProvider = "shopify" | "woocommerce";
+export type CatalogIntegrationStatus = "active" | "disabled";
+
+export interface CatalogIntegrationRecord {
+  id: string;
+  ownerUid: string;
+  ownerName: string;
+  provider: CatalogIntegrationProvider;
+  label: string;
+  storeUrl: string;
+  status: CatalogIntegrationStatus;
+  syncEveryHours: number;
+  shopifyAccessToken?: string;
+  shopifyApiVersion?: string;
+  wooConsumerKey?: string;
+  wooConsumerSecret?: string;
+  lastSyncedAt?: string;
+  lastSyncStatus?: "success" | "failed";
+  lastSyncMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CatalogSyncRunRecord {
+  id: string;
+  integrationId: string;
+  ownerUid: string;
+  provider: CatalogIntegrationProvider;
+  status: "success" | "failed";
+  importedProducts: number;
+  importedServices: number;
+  updatedProducts: number;
+  updatedServices: number;
+  message: string;
+  trigger: "manual" | "scheduled";
+  createdAt: string;
 }
 
 function sanitizePricingPlanKey(value: string) {
@@ -2731,6 +3133,14 @@ function mapDigitalProduct(snapshotId: string, data: Record<string, unknown>) {
       ? String(data.ownerCertificateSerial)
       : undefined,
     ownerBusinessSlug: data.ownerBusinessSlug ? String(data.ownerBusinessSlug) : undefined,
+    externalSource:
+      data.externalSource === "woocommerce" || data.externalSource === "shopify"
+        ? (data.externalSource as CatalogIntegrationProvider)
+        : undefined,
+    externalProductId: data.externalProductId ? String(data.externalProductId) : undefined,
+    stockAvailable: data.stockAvailable ? Number(data.stockAvailable) : undefined,
+    externalStoreUrl: data.externalStoreUrl ? String(data.externalStoreUrl) : undefined,
+    lastSyncedAt: data.lastSyncedAt ? String(data.lastSyncedAt) : undefined,
     createdAt: toISODate(data.createdAt),
     updatedAt: toISODate(data.updatedAt),
   } satisfies DigitalProductRecord;
@@ -2765,9 +3175,172 @@ function mapBusinessService(snapshotId: string, data: Record<string, unknown>) {
     ownerCertificateSerial: data.ownerCertificateSerial
       ? String(data.ownerCertificateSerial)
       : undefined,
+    externalSource:
+      data.externalSource === "woocommerce" || data.externalSource === "shopify"
+        ? (data.externalSource as CatalogIntegrationProvider)
+        : undefined,
+    externalProductId: data.externalProductId ? String(data.externalProductId) : undefined,
+    stockAvailable: data.stockAvailable ? Number(data.stockAvailable) : undefined,
+    externalStoreUrl: data.externalStoreUrl ? String(data.externalStoreUrl) : undefined,
+    lastSyncedAt: data.lastSyncedAt ? String(data.lastSyncedAt) : undefined,
     createdAt: toISODate(data.createdAt),
     updatedAt: toISODate(data.updatedAt),
   } satisfies BusinessServiceRecord;
+}
+
+type ExternalCatalogItem = {
+  externalId: string;
+  title: string;
+  description: string;
+  category: string;
+  price: number;
+  currency: "INR" | "USD";
+  stock: number;
+  sourceUrl?: string;
+};
+
+function normalizeStoreUrl(raw: string) {
+  const input = raw.trim();
+  if (!input) return "";
+  const normalized = input.startsWith("http://") || input.startsWith("https://")
+    ? input
+    : `https://${input}`;
+  try {
+    const url = new URL(normalized);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "";
+  }
+}
+
+function mapCatalogIntegration(snapshotId: string, data: Record<string, unknown>) {
+  const provider = String(data.provider ?? "shopify").trim().toLowerCase();
+  return {
+    id: snapshotId,
+    ownerUid: String(data.ownerUid ?? ""),
+    ownerName: String(data.ownerName ?? "Business"),
+    provider: provider === "woocommerce" ? "woocommerce" : "shopify",
+    label: String(data.label ?? "Catalog Integration"),
+    storeUrl: String(data.storeUrl ?? ""),
+    status: String(data.status ?? "active") === "disabled" ? "disabled" : "active",
+    syncEveryHours: Math.max(6, Math.min(168, Number(data.syncEveryHours ?? 24))),
+    shopifyAccessToken: data.shopifyAccessToken ? String(data.shopifyAccessToken) : undefined,
+    shopifyApiVersion: data.shopifyApiVersion ? String(data.shopifyApiVersion) : undefined,
+    wooConsumerKey: data.wooConsumerKey ? String(data.wooConsumerKey) : undefined,
+    wooConsumerSecret: data.wooConsumerSecret ? String(data.wooConsumerSecret) : undefined,
+    lastSyncedAt: data.lastSyncedAt ? String(data.lastSyncedAt) : undefined,
+    lastSyncStatus:
+      data.lastSyncStatus === "failed" || data.lastSyncStatus === "success"
+        ? (data.lastSyncStatus as "success" | "failed")
+        : undefined,
+    lastSyncMessage: data.lastSyncMessage ? String(data.lastSyncMessage) : undefined,
+    createdAt: toISODate(data.createdAt),
+    updatedAt: toISODate(data.updatedAt),
+  } satisfies CatalogIntegrationRecord;
+}
+
+function mapCatalogSyncRun(snapshotId: string, data: Record<string, unknown>) {
+  return {
+    id: snapshotId,
+    integrationId: String(data.integrationId ?? ""),
+    ownerUid: String(data.ownerUid ?? ""),
+    provider: String(data.provider ?? "shopify") === "woocommerce" ? "woocommerce" : "shopify",
+    status: data.status === "failed" ? "failed" : "success",
+    importedProducts: Number(data.importedProducts ?? 0),
+    importedServices: Number(data.importedServices ?? 0),
+    updatedProducts: Number(data.updatedProducts ?? 0),
+    updatedServices: Number(data.updatedServices ?? 0),
+    message: String(data.message ?? ""),
+    trigger: data.trigger === "scheduled" ? "scheduled" : "manual",
+    createdAt: toISODate(data.createdAt),
+  } satisfies CatalogSyncRunRecord;
+}
+
+async function fetchShopifyCatalogItems(integration: CatalogIntegrationRecord) {
+  const storeUrl = normalizeStoreUrl(integration.storeUrl);
+  if (!storeUrl || !integration.shopifyAccessToken) {
+    throw new Error("Shopify integration credentials are incomplete.");
+  }
+  const apiVersion = integration.shopifyApiVersion?.trim() || "2024-10";
+  const endpoint = `${storeUrl}/admin/api/${apiVersion}/products.json?limit=120`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+      "X-Shopify-Access-Token": integration.shopifyAccessToken,
+    },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Shopify API returned ${response.status}.`);
+  }
+  const body = (await response.json()) as {
+    products?: Array<Record<string, unknown>>;
+  };
+  const products = Array.isArray(body.products) ? body.products : [];
+  return products.map((item) => {
+    const variants = Array.isArray(item.variants) ? (item.variants as Array<Record<string, unknown>>) : [];
+    const firstVariant = variants[0] ?? {};
+    const price = Number(firstVariant.price ?? 0);
+    const currencyRaw = String(firstVariant.currency ?? "INR").toUpperCase();
+    const currency: "INR" | "USD" = currencyRaw === "USD" ? "USD" : "INR";
+    const stock = variants.reduce((sum, variant) => sum + Number(variant.inventory_quantity ?? 0), 0);
+    return {
+      externalId: String(item.id ?? ""),
+      title: String(item.title ?? "Untitled"),
+      description: String(item.body_html ?? ""),
+      category: String(item.product_type ?? "General"),
+      price: Number.isFinite(price) && price > 0 ? price : 1,
+      currency,
+      stock: Number.isFinite(stock) ? Math.max(0, Math.round(stock)) : 0,
+      sourceUrl: item.handle ? `${storeUrl}/products/${String(item.handle)}` : undefined,
+    } satisfies ExternalCatalogItem;
+  }).filter((row) => Boolean(row.externalId));
+}
+
+async function fetchWooCommerceCatalogItems(integration: CatalogIntegrationRecord) {
+  const storeUrl = normalizeStoreUrl(integration.storeUrl);
+  if (!storeUrl || !integration.wooConsumerKey || !integration.wooConsumerSecret) {
+    throw new Error("WooCommerce integration credentials are incomplete.");
+  }
+  const endpoint = new URL(`${storeUrl}/wp-json/wc/v3/products`);
+  endpoint.searchParams.set("per_page", "100");
+  endpoint.searchParams.set("page", "1");
+  endpoint.searchParams.set("consumer_key", integration.wooConsumerKey);
+  endpoint.searchParams.set("consumer_secret", integration.wooConsumerSecret);
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+    },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`WooCommerce API returned ${response.status}.`);
+  }
+  const body = (await response.json()) as Array<Record<string, unknown>>;
+  const products = Array.isArray(body) ? body : [];
+  return products.map((item) => {
+    const price = Number(item.regular_price ?? item.price ?? 0);
+    const stock = Number(item.stock_quantity ?? 0);
+    const categories = Array.isArray(item.categories) ? (item.categories as Array<Record<string, unknown>>) : [];
+    const primaryCategory = categories[0]?.name ? String(categories[0].name) : "General";
+    return {
+      externalId: String(item.id ?? ""),
+      title: String(item.name ?? "Untitled"),
+      description: String(item.short_description ?? item.description ?? ""),
+      category: primaryCategory,
+      price: Number.isFinite(price) && price > 0 ? price : 1,
+      currency: "INR",
+      stock: Number.isFinite(stock) ? Math.max(0, Math.round(stock)) : 0,
+      sourceUrl: item.permalink ? String(item.permalink) : undefined,
+    } satisfies ExternalCatalogItem;
+  }).filter((row) => Boolean(row.externalId));
+}
+
+function isCatalogServiceCandidate(item: ExternalCatalogItem) {
+  const text = `${item.title} ${item.category}`.toLowerCase();
+  return /(service|consult|support|repair|mainten|installation|training|coaching)/.test(text);
 }
 
 async function enrichProductsWithSocialProof(rows: DigitalProductRecord[]) {
@@ -2908,6 +3481,380 @@ export async function fetchPublicBusinessServices(limitRows = 120) {
     ),
   );
   return snapshots.docs.map((snapshot) => mapBusinessService(snapshot.id, snapshot.data()));
+}
+
+export async function upsertCatalogIntegration(payload: {
+  ownerUid: string;
+  ownerName: string;
+  integrationId?: string;
+  provider: CatalogIntegrationProvider;
+  label: string;
+  storeUrl: string;
+  syncEveryHours?: number;
+  status?: CatalogIntegrationStatus;
+  shopifyAccessToken?: string;
+  shopifyApiVersion?: string;
+  wooConsumerKey?: string;
+  wooConsumerSecret?: string;
+}) {
+  const database = getDb();
+  const cleanStoreUrl = normalizeStoreUrl(payload.storeUrl);
+  if (!cleanStoreUrl) {
+    throw new Error("Store URL is invalid.");
+  }
+  const basePayload = {
+    ownerUid: payload.ownerUid,
+    ownerName: payload.ownerName,
+    provider: payload.provider,
+    label: payload.label.trim() || `${payload.provider} integration`,
+    storeUrl: cleanStoreUrl,
+    syncEveryHours: Math.max(6, Math.min(168, Math.round(payload.syncEveryHours ?? 24))),
+    status: payload.status ?? "active",
+    shopifyAccessToken: payload.shopifyAccessToken?.trim() || null,
+    shopifyApiVersion: payload.shopifyApiVersion?.trim() || "2024-10",
+    wooConsumerKey: payload.wooConsumerKey?.trim() || null,
+    wooConsumerSecret: payload.wooConsumerSecret?.trim() || null,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (payload.integrationId?.trim()) {
+    const ref = doc(database, "catalogIntegrations", payload.integrationId.trim());
+    await setDoc(ref, basePayload, { merge: true });
+    return payload.integrationId.trim();
+  }
+  const created = await addDoc(collection(database, "catalogIntegrations"), {
+    ...basePayload,
+    createdAt: serverTimestamp(),
+  });
+  return created.id;
+}
+
+export async function fetchCatalogIntegrationsByOwner(ownerUid: string) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "catalogIntegrations"),
+      where("ownerUid", "==", ownerUid),
+      limit(120),
+    ),
+  );
+  return snapshots.docs
+    .map((snapshot) => mapCatalogIntegration(snapshot.id, snapshot.data()))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+export async function fetchCatalogSyncRunsByOwner(ownerUid: string) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "catalogSyncRuns"),
+      where("ownerUid", "==", ownerUid),
+      limit(300),
+    ),
+  );
+  return snapshots.docs
+    .map((snapshot) => mapCatalogSyncRun(snapshot.id, snapshot.data()))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+export async function testCatalogIntegrationConnection(payload: {
+  provider: CatalogIntegrationProvider;
+  storeUrl: string;
+  shopifyAccessToken?: string;
+  shopifyApiVersion?: string;
+  wooConsumerKey?: string;
+  wooConsumerSecret?: string;
+}) {
+  const integration = {
+    id: "test",
+    ownerUid: "test",
+    ownerName: "Test",
+    provider: payload.provider,
+    label: "Test",
+    storeUrl: payload.storeUrl,
+    status: "active" as const,
+    syncEveryHours: 24,
+    shopifyAccessToken: payload.shopifyAccessToken,
+    shopifyApiVersion: payload.shopifyApiVersion,
+    wooConsumerKey: payload.wooConsumerKey,
+    wooConsumerSecret: payload.wooConsumerSecret,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  } satisfies CatalogIntegrationRecord;
+  const rows =
+    integration.provider === "shopify"
+      ? await fetchShopifyCatalogItems(integration)
+      : await fetchWooCommerceCatalogItems(integration);
+  return {
+    ok: true,
+    sampled: rows.slice(0, 3).map((row) => ({
+      title: row.title,
+      category: row.category,
+      price: row.price,
+      stock: row.stock,
+    })),
+    totalFetched: rows.length,
+  };
+}
+
+async function upsertExternalProduct(payload: {
+  ownerUid: string;
+  ownerName: string;
+  ownerBusinessSlug?: string;
+  ownerTrustScore: number;
+  ownerCertificateSerial?: string;
+  provider: CatalogIntegrationProvider;
+  item: ExternalCatalogItem;
+}) {
+  const database = getDb();
+  const syncDocId = `${payload.ownerUid}_${payload.provider}_${payload.item.externalId}`
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 120);
+  const productRef = doc(database, "digitalProducts", syncDocId);
+  const row = await getDoc(productRef);
+  const data = {
+    ownerUid: payload.ownerUid,
+    ownerName: payload.ownerName,
+    title: payload.item.title,
+    description: payload.item.description || "Imported from external store.",
+    category: payload.item.category || "General",
+    price: Math.max(1, Math.round(payload.item.price)),
+    pricingPlans: [
+      {
+        key: "standard",
+        name: "Standard",
+        billingCycle: "one_time",
+        price: Math.max(1, Math.round(payload.item.price)),
+      },
+    ],
+    noRefund: false,
+    ownerBusinessSlug: payload.ownerBusinessSlug ?? null,
+    ownerTrustScore: payload.ownerTrustScore,
+    ownerCertificateSerial: payload.ownerCertificateSerial ?? null,
+    externalSource: payload.provider,
+    externalProductId: payload.item.externalId,
+    externalStoreUrl: payload.item.sourceUrl ?? null,
+    stockAvailable: payload.item.stock,
+    lastSyncedAt: new Date().toISOString(),
+    updatedAt: serverTimestamp(),
+  };
+  if (row.exists()) {
+    await updateDoc(productRef, data);
+    return "updated";
+  }
+  await setDoc(productRef, {
+    ...data,
+    uniqueLinkSlug: `${toSlug(payload.item.title)}-${Math.random().toString(36).slice(2, 8)}`,
+    favoritesCount: 0,
+    salesCount: 0,
+    refundCount: 0,
+    reviewsCount: 0,
+    averageRating: 0,
+    createdAt: serverTimestamp(),
+  });
+  return "created";
+}
+
+async function upsertExternalService(payload: {
+  ownerUid: string;
+  ownerName: string;
+  ownerBusinessSlug?: string;
+  ownerTrustScore: number;
+  ownerCertificateSerial?: string;
+  provider: CatalogIntegrationProvider;
+  item: ExternalCatalogItem;
+}) {
+  const database = getDb();
+  const syncDocId = `${payload.ownerUid}_${payload.provider}_${payload.item.externalId}`
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 120);
+  const serviceRef = doc(database, "businessServices", syncDocId);
+  const row = await getDoc(serviceRef);
+  const data = {
+    ownerUid: payload.ownerUid,
+    ownerName: payload.ownerName,
+    title: payload.item.title,
+    description: payload.item.description || "Imported from external store.",
+    category: payload.item.category || "General",
+    startingPrice: Math.max(1, Math.round(payload.item.price)),
+    currency: payload.item.currency,
+    serviceMode: "online",
+    deliveryMode: "remote",
+    ownerBusinessSlug: payload.ownerBusinessSlug ?? null,
+    ownerTrustScore: payload.ownerTrustScore,
+    ownerCertificateSerial: payload.ownerCertificateSerial ?? null,
+    externalSource: payload.provider,
+    externalProductId: payload.item.externalId,
+    externalStoreUrl: payload.item.sourceUrl ?? null,
+    stockAvailable: payload.item.stock,
+    lastSyncedAt: new Date().toISOString(),
+    updatedAt: serverTimestamp(),
+  };
+  if (row.exists()) {
+    await updateDoc(serviceRef, data);
+    return "updated";
+  }
+  await setDoc(serviceRef, {
+    ...data,
+    uniqueLinkSlug: `${toSlug(payload.item.title)}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: serverTimestamp(),
+  });
+  return "created";
+}
+
+export async function syncCatalogIntegrationById(payload: {
+  ownerUid: string;
+  integrationId: string;
+  trigger?: "manual" | "scheduled";
+}) {
+  const database = getDb();
+  const integrationRef = doc(database, "catalogIntegrations", payload.integrationId);
+  const integrationSnapshot = await getDoc(integrationRef);
+  if (!integrationSnapshot.exists()) {
+    throw new Error("Integration not found.");
+  }
+  const integration = mapCatalogIntegration(integrationSnapshot.id, integrationSnapshot.data());
+  if (integration.ownerUid !== payload.ownerUid) {
+    throw new Error("Integration owner mismatch.");
+  }
+  if (integration.status !== "active") {
+    throw new Error("Integration is disabled.");
+  }
+
+  const business = await fetchPrimaryBusinessByOwner(payload.ownerUid);
+  if (!business || business.status !== "approved") {
+    throw new Error("Approve business profile before syncing catalog.");
+  }
+
+  const items =
+    integration.provider === "shopify"
+      ? await fetchShopifyCatalogItems(integration)
+      : await fetchWooCommerceCatalogItems(integration);
+
+  let importedProducts = 0;
+  let importedServices = 0;
+  let updatedProducts = 0;
+  let updatedServices = 0;
+
+  for (const item of items) {
+    if (isCatalogServiceCandidate(item)) {
+      const result = await upsertExternalService({
+        ownerUid: integration.ownerUid,
+        ownerName: integration.ownerName,
+        ownerBusinessSlug: business.slug,
+        ownerTrustScore: business.trustScore,
+        ownerCertificateSerial: business.certificateSerial,
+        provider: integration.provider,
+        item,
+      });
+      if (result === "created") importedServices += 1;
+      if (result === "updated") updatedServices += 1;
+      continue;
+    }
+    const result = await upsertExternalProduct({
+      ownerUid: integration.ownerUid,
+      ownerName: integration.ownerName,
+      ownerBusinessSlug: business.slug,
+      ownerTrustScore: business.trustScore,
+      ownerCertificateSerial: business.certificateSerial,
+      provider: integration.provider,
+      item,
+    });
+    if (result === "created") importedProducts += 1;
+    if (result === "updated") updatedProducts += 1;
+  }
+
+  const summary = `Fetched ${items.length} item(s). Products +${importedProducts}/${updatedProducts} updated, services +${importedServices}/${updatedServices} updated.`;
+  await updateDoc(integrationRef, {
+    lastSyncedAt: new Date().toISOString(),
+    lastSyncStatus: "success",
+    lastSyncMessage: summary,
+    updatedAt: serverTimestamp(),
+  });
+  await addDoc(collection(database, "catalogSyncRuns"), {
+    integrationId: integration.id,
+    ownerUid: integration.ownerUid,
+    provider: integration.provider,
+    status: "success",
+    importedProducts,
+    importedServices,
+    updatedProducts,
+    updatedServices,
+    message: summary,
+    trigger: payload.trigger ?? "manual",
+    createdAt: serverTimestamp(),
+  });
+  return {
+    integrationId: integration.id,
+    totalFetched: items.length,
+    importedProducts,
+    importedServices,
+    updatedProducts,
+    updatedServices,
+  };
+}
+
+export async function runDueCatalogIntegrationSync(payload?: {
+  trigger?: "manual" | "scheduled";
+  force?: boolean;
+}) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "catalogIntegrations"),
+      where("status", "==", "active"),
+      limit(300),
+    ),
+  );
+  const integrations = snapshots.docs.map((snapshot) =>
+    mapCatalogIntegration(snapshot.id, snapshot.data()),
+  );
+  const now = Date.now();
+  let attempted = 0;
+  let synced = 0;
+  let failed = 0;
+
+  for (const integration of integrations) {
+    const hours = Math.max(6, integration.syncEveryHours || 24);
+    const last = integration.lastSyncedAt ? Date.parse(integration.lastSyncedAt) : 0;
+    const due = payload?.force ? true : !last || now - last >= hours * 60 * 60 * 1000;
+    if (!due) continue;
+    attempted += 1;
+    try {
+      await syncCatalogIntegrationById({
+        ownerUid: integration.ownerUid,
+        integrationId: integration.id,
+        trigger: payload?.trigger ?? "scheduled",
+      });
+      synced += 1;
+    } catch (error) {
+      failed += 1;
+      await updateDoc(doc(database, "catalogIntegrations", integration.id), {
+        lastSyncedAt: new Date().toISOString(),
+        lastSyncStatus: "failed",
+        lastSyncMessage: error instanceof Error ? error.message : "Sync failed.",
+        updatedAt: serverTimestamp(),
+      });
+      await addDoc(collection(database, "catalogSyncRuns"), {
+        integrationId: integration.id,
+        ownerUid: integration.ownerUid,
+        provider: integration.provider,
+        status: "failed",
+        importedProducts: 0,
+        importedServices: 0,
+        updatedProducts: 0,
+        updatedServices: 0,
+        message: error instanceof Error ? error.message : "Sync failed.",
+        trigger: payload?.trigger ?? "scheduled",
+        createdAt: serverTimestamp(),
+      });
+    }
+  }
+  return {
+    attempted,
+    synced,
+    failed,
+  };
 }
 
 export async function fetchDigitalProductBySlug(slug: string) {
@@ -5306,14 +6253,14 @@ export async function searchPublicMarketplace(queryText: string, maxRows = 60) {
   const hits: PublicSearchHitRecord[] = [];
 
   for (const row of businesses) {
-    const searchable = `${row.businessName} ${row.city} ${row.country} ${row.category}`;
+    const searchable = `${row.businessName} ${row.publicBusinessKey} ${row.city} ${row.country} ${row.category}`;
     const score = rankSearchText(searchable, text);
     if (!score) continue;
     hits.push({
       id: row.id,
       type: "business",
       title: row.businessName,
-      subtitle: `${row.city}, ${row.country} • Trust ${row.trustScore}`,
+      subtitle: `${row.city}, ${row.country} | Trust ${row.trustScore} | Key ${row.publicBusinessKey}`,
       href: `/business/${row.slug}`,
       score: score + row.trustScore / 10,
     });
@@ -5327,7 +6274,7 @@ export async function searchPublicMarketplace(queryText: string, maxRows = 60) {
       id: row.id,
       type: "product",
       title: row.title,
-      subtitle: `${row.ownerName} • INR ${row.price}`,
+      subtitle: `${row.ownerName} | INR ${row.price}`,
       href: `/products/${row.uniqueLinkSlug}`,
       score: score + row.salesCount / 25,
     });
@@ -5355,7 +6302,7 @@ export async function searchPublicMarketplace(queryText: string, maxRows = 60) {
       id: row.id,
       type: "group",
       title: row.title,
-      subtitle: `${row.membersCount} members • ${row.adminOnlyMessaging ? "Admin-only chat" : "Public chat"}`,
+      subtitle: `${row.membersCount} members | ${row.adminOnlyMessaging ? "Admin-only chat" : "Public chat"}`,
       href: `/groups/${row.id}`,
       score,
     });
@@ -5369,7 +6316,7 @@ export async function searchPublicMarketplace(queryText: string, maxRows = 60) {
       id: row.businessApplicationId,
       type: "partnership",
       title: row.businessName,
-      subtitle: `${row.partnershipCategory ?? "Partnership"} • ${row.city}, ${row.country}`,
+      subtitle: `${row.partnershipCategory ?? "Partnership"} | ${row.city}, ${row.country}`,
       href: "/partnerships",
       score,
     });
@@ -8859,3 +9806,4 @@ export async function completePartnershipDeal(payload: {
 
   return { feeAmount };
 }
+

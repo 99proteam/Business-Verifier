@@ -27,6 +27,7 @@ export type HomeShowcaseData = {
     country: string;
     category: string;
     slug: string;
+    publicBusinessKey: string;
     trustScore: number;
     yearsInField: number;
     isRecommended?: boolean;
@@ -297,6 +298,7 @@ export function HomeBusinessShowcase({
                 <p className="mt-2 text-xs text-muted">
                   Trust {business.trustScore} | {business.yearsInField} years
                 </p>
+                <p className="mt-1 text-xs text-muted">Business key: {business.publicBusinessKey}</p>
                 <div className="mt-3 space-y-2">
                   <p className="text-xs text-muted">Products and services</p>
                   {!offerings.length ? (
@@ -319,12 +321,20 @@ export function HomeBusinessShowcase({
                     </div>
                   )}
                 </div>
-                <Link
-                  href={`/business/${business.slug}`}
-                  className="mt-3 inline-flex rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
-                >
-                  Open profile
-                </Link>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Link
+                    href={`/business/${business.slug}`}
+                    className="inline-flex rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
+                  >
+                    Open profile
+                  </Link>
+                  <Link
+                    href={`/dashboard/tickets/new?business=${encodeURIComponent(business.businessName)}`}
+                    className="inline-flex rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
+                  >
+                    Raise ticket
+                  </Link>
+                </div>
               </article>
             );
           })}

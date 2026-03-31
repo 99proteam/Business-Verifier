@@ -169,7 +169,7 @@ export function DirectoryClientPage({
           : item.mode === "offline" || item.mode === "hybrid";
       const matchText =
         !textQuery ||
-        `${item.businessName} ${item.city} ${item.category}`
+        `${item.businessName} ${item.publicBusinessKey} ${item.city} ${item.category}`
           .toLowerCase()
           .includes(textQuery);
       const matchCountry = !countryFilter || item.country === countryFilter;
@@ -264,7 +264,7 @@ export function DirectoryClientPage({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search by business name, city, or category..."
+              placeholder="Search by business key, name, city, or category..."
               className="w-full bg-transparent text-sm outline-none"
             />
           </div>
@@ -357,6 +357,9 @@ export function DirectoryClientPage({
                     <p className="mt-1 text-xs text-muted">
                       {business.mode} | {business.yearsInField} years | Followers{" "}
                       {business.followersCount}
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      Business key {business.publicBusinessKey}
                     </p>
                     <p className="mt-1 text-xs text-muted">
                       Locked deposit INR {business.totalLockedDeposit ?? 0} | Available INR{" "}

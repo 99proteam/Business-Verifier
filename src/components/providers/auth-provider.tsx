@@ -19,6 +19,7 @@ import { auth, googleProvider } from "@/lib/firebase/client";
 import {
   ensureUserProfile,
   fetchAuthenticatorSettings,
+  fetchCurrentUserNavigationContext,
   verifyAuthenticatorChallenge,
 } from "@/lib/firebase/repositories";
 
@@ -27,6 +28,9 @@ type AuthContextValue = {
   isLoading: boolean;
   mfaRequired: boolean;
   isMfaVerified: boolean;
+  role: string;
+  roleSelectionCompleted: boolean;
+  isAdmin: boolean;
   hasFirebaseConfig: boolean;
   signInWithGoogle: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
@@ -42,11 +46,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(Boolean(auth));
   const [mfaRequired, setMfaRequired] = useState(false);
   const [isMfaVerified, setIsMfaVerified] = useState(false);
+  const [role, setRole] = useState("customer");
+  const [roleSelectionCompleted, setRoleSelectionCompleted] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const syncMfaState = useCallback(async (nextUser: User | null) => {
     if (!nextUser || !auth) {
       setMfaRequired(false);
       setIsMfaVerified(false);
+      setRole("customer");
+      setRoleSelectionCompleted(false);
+      setIsAdmin(false);
       return;
     }
     const settings = await fetchAuthenticatorSettings(nextUser.uid);
@@ -71,9 +81,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (currentUser) {
           await ensureUserProfile(currentUser);
           await syncMfaState(currentUser);
+          const nav = await fetchCurrentUserNavigationContext(currentUser.uid);
+          setRole(nav.role);
+          setRoleSelectionCompleted(nav.roleSelectionCompleted);
+          setIsAdmin(nav.isAdmin);
         } else {
           setMfaRequired(false);
           setIsMfaVerified(false);
+          setRole("customer");
+          setRoleSelectionCompleted(false);
+          setIsAdmin(false);
         }
         setIsLoading(false);
       })().catch(() => {
@@ -146,6 +163,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isLoading,
       mfaRequired,
       isMfaVerified,
+      role,
+      roleSelectionCompleted,
+      isAdmin,
       hasFirebaseConfig: Boolean(auth),
       signInWithGoogle,
       requestPasswordReset,
@@ -155,11 +175,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       completeMfaVerification,
-      isLoading,
-      isMfaVerified,
-      mfaRequired,
-      requestPasswordReset,
-      refreshSecurityState,
+        isLoading,
+        isMfaVerified,
+        isAdmin,
+        mfaRequired,
+        requestPasswordReset,
+        role,
+        roleSelectionCompleted,
+        refreshSecurityState,
       signInWithGoogle,
       signOut,
       user,

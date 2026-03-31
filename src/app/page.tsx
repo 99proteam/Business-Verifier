@@ -8,6 +8,7 @@ import {
   UserCheck,
 } from "lucide-react";
 import { HomeBusinessShowcase, type HomeShowcaseData } from "@/components/home/home-business-showcase";
+import { HomeGlobalSearch } from "@/components/home/home-global-search";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { SiteHeader } from "@/components/layout/site-header";
 import { getCachedHomeShowcase } from "@/lib/server/public-cache";
@@ -120,6 +121,8 @@ export default async function Home() {
             <p className="mt-1 text-muted">Pro business deposits improve buyer confidence.</p>
           </article>
         </section>
+
+        <HomeGlobalSearch />
 
         <section className="grid gap-4 md:grid-cols-2">
           <article className="rounded-2xl border border-border bg-white p-6">

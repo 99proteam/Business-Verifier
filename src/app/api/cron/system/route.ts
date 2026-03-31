@@ -6,6 +6,7 @@ import {
   recordAutomationJobRun,
   releaseDueEscrowOrders,
   releaseMaturedProDeposits,
+  runDueCatalogIntegrationSync,
   runBillingMaintenance,
 } from "@/lib/firebase/repositories";
 import { sendOpsAlert } from "@/lib/server/ops/alerts";
@@ -54,11 +55,12 @@ export async function GET(request: NextRequest) {
   const monthKey = searchParams.get("monthKey")?.trim() || undefined;
 
   try {
-    const [invoiceIds, escrowResult, depositResult, billingResult] = await Promise.all([
+    const [invoiceIds, escrowResult, depositResult, billingResult, catalogResult] = await Promise.all([
       generateInvoicesForAllBusinesses(monthKey),
       releaseDueEscrowOrders({ adminUid, adminName }),
       releaseMaturedProDeposits({ actorUid: adminUid, actorRole: "system" }),
       runBillingMaintenance({ adminUid }),
+      runDueCatalogIntegrationSync({ trigger: "scheduled" }),
     ]);
 
     await recordAutomationJobRun({
@@ -71,6 +73,7 @@ export async function GET(request: NextRequest) {
         escrowReleased: escrowResult.released,
         depositsReleased: depositResult.released,
         reminders: billingResult.remindersSent,
+        catalogSynced: catalogResult.synced,
       },
     });
 
@@ -127,6 +130,7 @@ export async function GET(request: NextRequest) {
         escrowResult,
         depositResult,
         billingResult,
+        catalogResult,
         distributionResult,
       },
     });

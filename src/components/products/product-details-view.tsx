@@ -43,6 +43,9 @@ export function ProductDetailsView({
           Sales {product.salesCount} | Refunds {product.refundCount} | Rating{" "}
           {product.averageRating}/5 ({product.reviewsCount})
         </p>
+        {typeof product.stockAvailable === "number" ? (
+          <p className="mt-1 text-sm text-muted">Stock available {product.stockAvailable}</p>
+        ) : null}
         <p className="mt-1 text-sm text-muted">
           Owner trust {product.ownerTrustScore} |{" "}
           {product.ownerCertificateSerial

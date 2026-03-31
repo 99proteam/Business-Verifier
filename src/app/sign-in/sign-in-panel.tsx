@@ -23,6 +23,7 @@ export function SignInPanel() {
       <h1 className="mt-4 text-3xl font-semibold tracking-tight">Welcome back</h1>
       <p className="mt-2 text-sm text-muted">
         To access sensitive business and support data, all users sign in with Gmail.
+        After sign-in, choose account type (customer, employee, or business owner).
         Accounts with authenticator enabled will be asked for MFA code after sign-in.
       </p>
 
@@ -46,7 +47,7 @@ export function SignInPanel() {
           setError(null);
           try {
             await signInWithGoogle();
-            router.push(returnUrl);
+            router.push(`/onboarding/account-type?returnUrl=${encodeURIComponent(returnUrl)}`);
           } catch (signInError) {
             setError(
               signInError instanceof Error

@@ -3,6 +3,7 @@ import {
   generateInvoicesForAllBusinesses,
   releaseDueEscrowOrders,
   releaseMaturedProDeposits,
+  runDueCatalogIntegrationSync,
   runBillingMaintenance,
 } from "@/lib/firebase/repositories";
 import { enforceApiRateLimit, getRequestIdentifier } from "@/lib/api/rate-limit";
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest) {
       : String(body.adminName ?? "System Automation").trim() || "System Automation";
     const monthKey = body.monthKey ? String(body.monthKey).trim() : undefined;
 
-    const [invoiceIds, escrowResult, depositResult, billingResult] = await Promise.all([
+    const [invoiceIds, escrowResult, depositResult, billingResult, catalogResult] = await Promise.all([
       generateInvoicesForAllBusinesses(monthKey),
       releaseDueEscrowOrders({
         adminUid,
@@ -55,6 +56,10 @@ export async function POST(request: NextRequest) {
       runBillingMaintenance({
         adminUid,
       }),
+      runDueCatalogIntegrationSync({
+        trigger: "manual",
+        force: true,
+      }),
     ]);
 
     return NextResponse.json({
@@ -64,6 +69,7 @@ export async function POST(request: NextRequest) {
         escrowResult,
         depositResult,
         billingResult,
+        catalogResult,
       },
       rateLimit,
     });

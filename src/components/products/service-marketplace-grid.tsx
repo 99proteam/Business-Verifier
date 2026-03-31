@@ -28,6 +28,9 @@ export function ServiceMarketplaceGrid({ rows }: { rows: BusinessServiceRecord[]
             <p className="mt-1 text-xs text-muted">
               {row.serviceMode} | {row.deliveryMode} | Trust {row.ownerTrustScore}
             </p>
+            {typeof row.stockAvailable === "number" ? (
+              <p className="mt-1 text-xs text-muted">Stock {row.stockAvailable}</p>
+            ) : null}
             <div className="mt-3 flex flex-wrap gap-2">
               {row.ownerBusinessSlug ? (
                 <Link
@@ -44,4 +47,3 @@ export function ServiceMarketplaceGrid({ rows }: { rows: BusinessServiceRecord[]
     </section>
   );
 }
-

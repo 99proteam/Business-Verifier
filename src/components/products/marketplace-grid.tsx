@@ -142,6 +142,9 @@ export function MarketplaceGrid({ initialRows }: { initialRows: DigitalProductRe
             <p className="mt-1 text-xs text-muted">
               Favorites {row.favoritesCount} | Sales {row.salesCount} | Refunds {row.refundCount}
             </p>
+            {typeof row.stockAvailable === "number" ? (
+              <p className="mt-1 text-xs text-muted">Stock {row.stockAvailable}</p>
+            ) : null}
             <p className="mt-1 text-xs text-muted">
               Rating {row.averageRating}/5 ({row.reviewsCount}) | Owner trust {row.ownerTrustScore}
             </p>

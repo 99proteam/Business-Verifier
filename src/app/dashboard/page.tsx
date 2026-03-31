@@ -261,7 +261,27 @@ const cards = [
 ];
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, role, isAdmin } = useAuth();
+  const visibleCards = cards.filter((card) => {
+    if (isAdmin) return true;
+    if (role === "business_owner") {
+      return !card.href.startsWith("/dashboard/admin");
+    }
+    if (role === "employee") {
+      return (
+        !card.href.startsWith("/dashboard/admin") &&
+        !card.href.startsWith("/dashboard/business") &&
+        card.href !== "/dashboard/membership/customer" &&
+        card.href !== "/dashboard/favorites" &&
+        card.href !== "/dashboard/following"
+      );
+    }
+    return (
+      !card.href.startsWith("/dashboard/admin") &&
+      !card.href.startsWith("/dashboard/business") &&
+      card.href !== "/dashboard/employment"
+    );
+  });
 
   return (
     <div>
@@ -278,7 +298,7 @@ export default function DashboardPage() {
           </div>
 
           <section className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {cards.map((card) => {
+            {visibleCards.map((card) => {
               const Icon = card.icon;
               return (
                 <article key={card.title} className="glass rounded-2xl p-5">

@@ -253,7 +253,7 @@ export function AdminAutomationPanel() {
       <section className="glass rounded-3xl p-6">
         <h1 className="text-2xl font-semibold tracking-tight">Automation monitor</h1>
         <p className="mt-2 text-sm text-muted">
-          Manual and scheduled automation controls for invoices, escrow release, deposits, and billing.
+          Manual and scheduled automation controls for invoices, escrow release, deposits, billing, and catalog sync.
         </p>
         <div className="mt-3 grid gap-2 md:grid-cols-2">
           <input

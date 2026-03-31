@@ -10,14 +10,20 @@ import {
   BusinessServiceDeliveryMode,
   BusinessServiceMode,
   BusinessServiceRecord,
+  CatalogIntegrationProvider,
+  CatalogIntegrationRecord,
+  CatalogSyncRunRecord,
   createBusinessService,
   createDigitalProduct,
   DigitalProductPricingCycle,
   DigitalProductPricingPlanRecord,
   DigitalProductRecord,
+  fetchCatalogIntegrationsByOwner,
+  fetchCatalogSyncRunsByOwner,
   fetchBusinessServicesByOwner,
   fetchDigitalProductsByOwner,
   sendProductOfferToFavoriteCustomers,
+  upsertCatalogIntegration,
 } from "@/lib/firebase/repositories";
 
 const schema = z.object({
@@ -59,6 +65,18 @@ export function ProductManager() {
   const [serviceDeliveryMode, setServiceDeliveryMode] =
     useState<BusinessServiceDeliveryMode>("remote");
   const [serviceSubmitting, setServiceSubmitting] = useState(false);
+  const [integrations, setIntegrations] = useState<CatalogIntegrationRecord[]>([]);
+  const [syncRuns, setSyncRuns] = useState<CatalogSyncRunRecord[]>([]);
+  const [integrationProvider, setIntegrationProvider] =
+    useState<CatalogIntegrationProvider>("shopify");
+  const [integrationLabel, setIntegrationLabel] = useState("");
+  const [integrationStoreUrl, setIntegrationStoreUrl] = useState("");
+  const [integrationSyncHours, setIntegrationSyncHours] = useState("24");
+  const [shopifyToken, setShopifyToken] = useState("");
+  const [shopifyVersion, setShopifyVersion] = useState("2024-10");
+  const [wooKey, setWooKey] = useState("");
+  const [wooSecret, setWooSecret] = useState("");
+  const [integrationBusy, setIntegrationBusy] = useState(false);
 
   const {
     register,
@@ -79,12 +97,16 @@ export function ProductManager() {
     }
     setLoading(true);
     try {
-      const [products, services] = await Promise.all([
+      const [products, services, integrationRows, runRows] = await Promise.all([
         fetchDigitalProductsByOwner(user.uid),
         fetchBusinessServicesByOwner(user.uid),
+        fetchCatalogIntegrationsByOwner(user.uid),
+        fetchCatalogSyncRunsByOwner(user.uid),
       ]);
       setRows(products);
       setServiceRows(services);
+      setIntegrations(integrationRows);
+      setSyncRuns(runRows.slice(0, 12));
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -276,6 +298,113 @@ export function ProductManager() {
       setError(sendError instanceof Error ? sendError.message : "Unable to send product offer.");
     } finally {
       setOfferBusy(false);
+    }
+  }
+
+  async function testIntegrationConnection() {
+    setIntegrationBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const response = await fetch("/api/catalog/integrations/test", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          provider: integrationProvider,
+          storeUrl: integrationStoreUrl,
+          shopifyAccessToken: shopifyToken,
+          shopifyApiVersion: shopifyVersion,
+          wooConsumerKey: wooKey,
+          wooConsumerSecret: wooSecret,
+        }),
+      });
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (!response.ok || !payload.ok) {
+        throw new Error(String(payload.error ?? "Integration test failed."));
+      }
+      const result = payload.result as Record<string, unknown>;
+      setInfo(`Connection test successful. Fetched ${String(result.totalFetched ?? 0)} item(s).`);
+    } catch (testError) {
+      setError(
+        testError instanceof Error
+          ? testError.message
+          : "Unable to test integration connection.",
+      );
+    } finally {
+      setIntegrationBusy(false);
+    }
+  }
+
+  async function saveIntegration() {
+    if (!user) return;
+    setIntegrationBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      if (!integrationStoreUrl.trim()) {
+        throw new Error("Store URL is required.");
+      }
+      if (integrationProvider === "shopify" && !shopifyToken.trim()) {
+        throw new Error("Shopify access token is required.");
+      }
+      if (
+        integrationProvider === "woocommerce" &&
+        (!wooKey.trim() || !wooSecret.trim())
+      ) {
+        throw new Error("WooCommerce consumer key and secret are required.");
+      }
+      await upsertCatalogIntegration({
+        ownerUid: user.uid,
+        ownerName: user.displayName ?? "Business",
+        provider: integrationProvider,
+        label: integrationLabel || `${integrationProvider} catalog`,
+        storeUrl: integrationStoreUrl,
+        syncEveryHours: Number(integrationSyncHours),
+        status: "active",
+        shopifyAccessToken: integrationProvider === "shopify" ? shopifyToken : undefined,
+        shopifyApiVersion: integrationProvider === "shopify" ? shopifyVersion : undefined,
+        wooConsumerKey: integrationProvider === "woocommerce" ? wooKey : undefined,
+        wooConsumerSecret: integrationProvider === "woocommerce" ? wooSecret : undefined,
+      });
+      setInfo("Integration saved. Auto sync will run every 24 hours via cron.");
+      await loadProducts();
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error ? saveError.message : "Unable to save integration.",
+      );
+    } finally {
+      setIntegrationBusy(false);
+    }
+  }
+
+  async function syncIntegration(integrationId: string) {
+    if (!user) return;
+    setIntegrationBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const response = await fetch("/api/catalog/integrations/sync", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ownerUid: user.uid,
+          integrationId,
+        }),
+      });
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (!response.ok || !payload.ok) {
+        throw new Error(String(payload.error ?? "Sync failed."));
+      }
+      setInfo("Catalog sync completed.");
+      await loadProducts();
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Unable to sync catalog.");
+    } finally {
+      setIntegrationBusy(false);
     }
   }
 
@@ -483,6 +612,143 @@ export function ProductManager() {
         </button>
       </form>
 
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">
+          Shopify and WooCommerce integration
+        </h2>
+        <p className="mt-1 text-xs text-muted">
+          Connect store APIs, test connection, and auto-sync products/stock every 24 hours.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <select
+            value={integrationProvider}
+            onChange={(event) => setIntegrationProvider(event.target.value as CatalogIntegrationProvider)}
+            className={fieldClass}
+          >
+            <option value="shopify">Shopify</option>
+            <option value="woocommerce">WooCommerce</option>
+          </select>
+          <input
+            value={integrationLabel}
+            onChange={(event) => setIntegrationLabel(event.target.value)}
+            placeholder="Integration label"
+            className={fieldClass}
+          />
+          <input
+            value={integrationStoreUrl}
+            onChange={(event) => setIntegrationStoreUrl(event.target.value)}
+            placeholder="Store URL (https://example.com)"
+            className={fieldClass}
+          />
+          <input
+            type="number"
+            value={integrationSyncHours}
+            onChange={(event) => setIntegrationSyncHours(event.target.value)}
+            placeholder="Sync every hours"
+            className={fieldClass}
+          />
+          {integrationProvider === "shopify" ? (
+            <>
+              <input
+                value={shopifyToken}
+                onChange={(event) => setShopifyToken(event.target.value)}
+                placeholder="Shopify access token"
+                className={fieldClass}
+              />
+              <input
+                value={shopifyVersion}
+                onChange={(event) => setShopifyVersion(event.target.value)}
+                placeholder="API version (2024-10)"
+                className={fieldClass}
+              />
+            </>
+          ) : (
+            <>
+              <input
+                value={wooKey}
+                onChange={(event) => setWooKey(event.target.value)}
+                placeholder="Woo consumer key"
+                className={fieldClass}
+              />
+              <input
+                value={wooSecret}
+                onChange={(event) => setWooSecret(event.target.value)}
+                placeholder="Woo consumer secret"
+                className={fieldClass}
+              />
+            </>
+          )}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void testIntegrationConnection()}
+            disabled={integrationBusy}
+            className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40 disabled:opacity-70"
+          >
+            Test connection
+          </button>
+          <button
+            type="button"
+            onClick={() => void saveIntegration()}
+            disabled={integrationBusy}
+            className="rounded-xl bg-brand px-3 py-2 text-sm font-medium text-white transition hover:bg-brand-strong disabled:opacity-70"
+          >
+            Save integration
+          </button>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          {!integrations.length && (
+            <p className="rounded-xl border border-border bg-surface p-3 text-xs text-muted">
+              No integrations added yet.
+            </p>
+          )}
+          {integrations.map((integration) => (
+            <article key={integration.id} className="rounded-xl border border-border bg-surface p-3">
+              <p className="text-sm font-medium">
+                {integration.label} | {integration.provider}
+              </p>
+              <p className="text-xs text-muted">{integration.storeUrl}</p>
+              <p className="text-xs text-muted">
+                Last sync: {integration.lastSyncedAt ? new Date(integration.lastSyncedAt).toLocaleString() : "Never"} |{" "}
+                {integration.lastSyncStatus ?? "pending"}
+              </p>
+              <button
+                type="button"
+                onClick={() => void syncIntegration(integration.id)}
+                disabled={integrationBusy}
+                className="mt-2 rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40 disabled:opacity-70"
+              >
+                Sync now
+              </button>
+            </article>
+          ))}
+        </div>
+
+        <div className="mt-4">
+          <p className="text-xs font-medium text-muted">Recent sync runs</p>
+          <div className="mt-2 space-y-2">
+            {!syncRuns.length && (
+              <p className="rounded-xl border border-border bg-surface p-3 text-xs text-muted">
+                No sync runs yet.
+              </p>
+            )}
+            {syncRuns.map((row) => (
+              <article key={row.id} className="rounded-xl border border-border bg-surface p-3 text-xs">
+                <p className="font-medium">
+                  {row.provider} | {row.status} | trigger {row.trigger}
+                </p>
+                <p className="text-muted">
+                  Products +{row.importedProducts}/{row.updatedProducts} | Services +{row.importedServices}/{row.updatedServices}
+                </p>
+                <p className="text-muted">{new Date(row.createdAt).toLocaleString()}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <form onSubmit={sendOffer} className="glass rounded-3xl p-6">
         <h2 className="text-lg font-semibold tracking-tight">Broadcast offer to favorites</h2>
         <p className="mt-1 text-xs text-muted">
@@ -555,6 +821,9 @@ export function ProductManager() {
             <p className="mt-1 text-sm text-muted">
               {row.category} | Favorites {row.favoritesCount}
             </p>
+            {typeof row.stockAvailable === "number" ? (
+              <p className="mt-1 text-xs text-muted">Stock {row.stockAvailable}</p>
+            ) : null}
             {row.noRefund && (
               <p className="mt-2 inline-flex rounded-full bg-danger/10 px-2 py-1 text-xs text-danger">
                 No Refund
@@ -582,6 +851,9 @@ export function ProductManager() {
             <p className="mt-1 text-sm text-muted">
               {row.category} | {row.serviceMode} | {row.deliveryMode}
             </p>
+            {typeof row.stockAvailable === "number" ? (
+              <p className="mt-1 text-xs text-muted">Stock {row.stockAvailable}</p>
+            ) : null}
             <p className="mt-2 text-xs text-muted">Service link key: {row.uniqueLinkSlug}</p>
           </article>
         ))}
