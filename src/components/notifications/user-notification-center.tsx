@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
+  fetchCurrentUserIdentityProfile,
   fetchUserNotifications,
   markUserNotificationAsSpam,
+  regenerateCurrentUserPublicId,
   UserNotificationRecord,
 } from "@/lib/firebase/repositories";
 
@@ -13,6 +15,8 @@ export function UserNotificationCenter() {
   const [rows, setRows] = useState<UserNotificationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState(false);
+  const [publicId, setPublicId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -24,7 +28,12 @@ export function UserNotificationCenter() {
     setLoading(true);
     setError(null);
     try {
-      setRows(await fetchUserNotifications(user.uid));
+      const [notifications, profile] = await Promise.all([
+        fetchUserNotifications(user.uid),
+        fetchCurrentUserIdentityProfile(user.uid),
+      ]);
+      setRows(notifications);
+      setPublicId(profile.publicId);
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -60,6 +69,26 @@ export function UserNotificationCenter() {
     }
   }
 
+  async function regeneratePublicId() {
+    if (!user) return;
+    setRegeneratingId(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const nextPublicId = await regenerateCurrentUserPublicId(user.uid);
+      setPublicId(nextPublicId);
+      setInfo(`Your notification ID was regenerated: ${nextPublicId}. Old ID is now revoked.`);
+    } catch (regenError) {
+      setError(
+        regenError instanceof Error
+          ? regenError.message
+          : "Unable to regenerate notification ID.",
+      );
+    } finally {
+      setRegeneratingId(false);
+    }
+  }
+
   if (!hasFirebaseConfig) {
     return (
       <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
@@ -83,6 +112,21 @@ export function UserNotificationCenter() {
         <p className="mt-2 text-sm text-muted">
           Receive offers, updates, general notices, and emergency alerts.
         </p>
+        <div className="mt-3 rounded-xl border border-border bg-surface p-3">
+          <p className="text-xs text-muted">Your unique notification ID</p>
+          <p className="mt-1 text-sm font-semibold">{publicId || "Loading..."}</p>
+          <p className="mt-1 text-xs text-muted">
+            Share this ID with trusted systems to receive updates. Regenerating revokes old ID immediately.
+          </p>
+          <button
+            type="button"
+            onClick={() => void regeneratePublicId()}
+            disabled={regeneratingId}
+            className="mt-2 rounded-xl border border-border px-3 py-2 text-xs transition hover:border-brand/40 disabled:opacity-70"
+          >
+            {regeneratingId ? "Regenerating..." : "Regenerate ID"}
+          </button>
+        </div>
       </div>
 
       {info && (

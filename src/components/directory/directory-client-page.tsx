@@ -397,6 +397,13 @@ export function DirectoryClientPage({
                       </Link>
 
                       <Link
+                        href={`/business/${business.slug}#questions`}
+                        className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
+                      >
+                        Questions
+                      </Link>
+
+                      <Link
                         href={`/dashboard/tickets/new?business=${encodeURIComponent(
                           business.businessName,
                         )}`}

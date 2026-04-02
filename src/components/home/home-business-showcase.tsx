@@ -329,6 +329,12 @@ export function HomeBusinessShowcase({
                     Open profile
                   </Link>
                   <Link
+                    href={`/business/${business.slug}#questions`}
+                    className="inline-flex rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
+                  >
+                    Questions
+                  </Link>
+                  <Link
                     href={`/dashboard/tickets/new?business=${encodeURIComponent(business.businessName)}`}
                     className="inline-flex rounded-lg border border-border px-2 py-1 text-xs transition hover:border-brand/40"
                   >

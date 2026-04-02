@@ -6,6 +6,7 @@ import { useAuth } from "@/components/providers/auth-provider";
 import {
   addBusinessEmployee,
   BusinessEmployeeRecord,
+  BusinessQuestionConversationMode,
   EmployeeAccessRequestRecord,
   fetchBusinessEmployeeRequests,
   fetchBusinessEmployees,
@@ -13,6 +14,7 @@ import {
   regenerateBusinessEmployeeJoinKey,
   removeBusinessEmployee,
   reviewBusinessEmployeeRequest,
+  updateBusinessQuestionConversationMode,
 } from "@/lib/firebase/repositories";
 
 function statusTone(status: EmployeeAccessRequestRecord["status"]) {
@@ -35,6 +37,7 @@ export function BusinessEmployeeManager() {
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [businessPublicKey, setBusinessPublicKey] = useState("");
   const [privateJoinKey, setPrivateJoinKey] = useState("");
+  const [questionMode, setQuestionMode] = useState<BusinessQuestionConversationMode>("public");
 
   const load = useCallback(async () => {
     if (!user || !hasFirebaseConfig) {
@@ -53,6 +56,7 @@ export function BusinessEmployeeManager() {
       setRequests(requestRows);
       setBusinessPublicKey(business?.publicBusinessKey ?? "");
       setPrivateJoinKey(business?.employeeJoinKey ?? "");
+      setQuestionMode(business?.questionConversationMode ?? "public");
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : "Unable to load employees.",
@@ -174,6 +178,33 @@ export function BusinessEmployeeManager() {
     }
   }
 
+  async function saveQuestionMode() {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await updateBusinessQuestionConversationMode({
+        ownerUid: user.uid,
+        mode: questionMode,
+      });
+      setInfo(
+        questionMode === "public"
+          ? "Customer question chat is now public."
+          : "Customer question chat is now private.",
+      );
+      await load();
+    } catch (modeError) {
+      setError(
+        modeError instanceof Error
+          ? modeError.message
+          : "Unable to update question visibility.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!hasFirebaseConfig) {
     return (
       <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
@@ -236,6 +267,33 @@ export function BusinessEmployeeManager() {
               Regenerate private key
             </button>
           </article>
+        </div>
+      </section>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Customer question chat visibility</h2>
+        <p className="mt-1 text-xs text-muted">
+          Public mode: everyone can see conversations. Private mode: only customer and business owner can view.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <select
+            value={questionMode}
+            onChange={(event) =>
+              setQuestionMode(event.target.value as BusinessQuestionConversationMode)
+            }
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+          >
+            <option value="public">Public</option>
+            <option value="private">Private</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => void saveQuestionMode()}
+            disabled={busy}
+            className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40 disabled:opacity-70"
+          >
+            Save setting
+          </button>
         </div>
       </section>
 
@@ -356,4 +414,3 @@ export function BusinessEmployeeManager() {
     </div>
   );
 }
-

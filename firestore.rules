@@ -66,6 +66,29 @@ service cloud.firestore {
         get(/databases/$(database)/documents/businessApplications/$(applicationId)).data.ownerUid == request.auth.uid;
     }
 
+    function isQuestionParticipant(applicationId, questionId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)) &&
+        (
+          (get(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)).data.customerUid is string &&
+            get(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)).data.customerUid == request.auth.uid) ||
+          (get(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)).data.ownerUid is string &&
+            get(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)).data.ownerUid == request.auth.uid) ||
+          (get(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)).data.participantUids is list &&
+            request.auth.uid in get(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)).data.participantUids)
+        );
+    }
+
+    function canReadQuestionThread(applicationId, questionId) {
+      return exists(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)) &&
+        (
+          get(/databases/$(database)/documents/businessApplications/$(applicationId)/questions/$(questionId)).data.mode == "public" ||
+          isAdmin() ||
+          isBusinessOwner(applicationId) ||
+          isQuestionParticipant(applicationId, questionId)
+        );
+    }
+
     function hasUserOwnership(data) {
       return (
         (data.ownerUid is string && data.ownerUid == request.auth.uid) ||
@@ -254,6 +277,47 @@ service cloud.firestore {
       allow read: if isAdmin() || isBusinessOwner(applicationId) || isSelf(employeeUid);
       allow create: if isAdmin() || isBusinessOwner(applicationId) || isSelf(employeeUid);
       allow update, delete: if isAdmin() || isBusinessOwner(applicationId) || isSelf(employeeUid);
+    }
+
+    match /businessApplications/{applicationId}/questions/{questionId} {
+      allow read: if resource.data.mode == "public" ||
+        isAdmin() ||
+        isBusinessOwner(applicationId) ||
+        (
+          isAuthenticated() &&
+          (
+            (resource.data.customerUid is string && resource.data.customerUid == request.auth.uid) ||
+            (resource.data.ownerUid is string && resource.data.ownerUid == request.auth.uid) ||
+            (resource.data.participantUids is list && request.auth.uid in resource.data.participantUids)
+          )
+        );
+      allow create: if isAuthenticated() &&
+        request.resource.data.customerUid is string &&
+        request.resource.data.customerUid == request.auth.uid &&
+        request.resource.data.businessId is string &&
+        request.resource.data.businessId == applicationId;
+      allow update, delete: if isAdmin() ||
+        isBusinessOwner(applicationId) ||
+        (
+          isAuthenticated() &&
+          (
+            (resource.data.customerUid is string && resource.data.customerUid == request.auth.uid) ||
+            (resource.data.ownerUid is string && resource.data.ownerUid == request.auth.uid) ||
+            (resource.data.participantUids is list && request.auth.uid in resource.data.participantUids)
+          )
+        );
+    }
+
+    match /businessApplications/{applicationId}/questions/{questionId}/messages/{messageId} {
+      allow read: if canReadQuestionThread(applicationId, questionId);
+      allow create: if (
+          isAdmin() ||
+          isBusinessOwner(applicationId) ||
+          isQuestionParticipant(applicationId, questionId)
+        ) &&
+        request.resource.data.senderUid is string &&
+        request.resource.data.senderUid == request.auth.uid;
+      allow update, delete: if isAdmin();
     }
 
     match /digitalProducts/{productId} {

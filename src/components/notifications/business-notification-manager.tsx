@@ -199,6 +199,40 @@ export function BusinessNotificationManager() {
         </p>
       </div>
 
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Business API documentation</h2>
+        <p className="mt-1 text-xs text-muted">
+          Use this to build your custom booking, CRM, ecommerce, or login experience.
+        </p>
+        <ol className="mt-3 space-y-2 text-sm text-muted">
+          <li>1. Create endpoint and securely store Endpoint ID + Secret in your backend.</li>
+          <li>2. Collect customer Verifier ID (`BVU-XXXX-XXXX`) during checkout/login.</li>
+          <li>3. Save Verifier ID in your order/user record for offers and updates.</li>
+          <li>4. Send updates using category `offers`, `updates`, `general`, or `emergency`.</li>
+          <li>5. If customer regenerates ID, old ID is revoked automatically.</li>
+        </ol>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <article className="rounded-2xl border border-border bg-surface p-3">
+            <p className="text-xs font-medium text-muted">Send notification payload</p>
+            <pre className="mt-2 overflow-x-auto text-xs text-muted">{`{
+  "endpointId": "YOUR_ENDPOINT_ID",
+  "endpointSecret": "YOUR_ENDPOINT_SECRET",
+  "category": "offers",
+  "title": "Summer Offer",
+  "message": "Save 10% on all services today.",
+  "recipientPublicIds": ["BVU-AB12-CD34", "BVU-EF56-GH78"]
+}`}</pre>
+          </article>
+          <article className="rounded-2xl border border-border bg-surface p-3">
+            <p className="text-xs font-medium text-muted">Verifier login mapping</p>
+            <pre className="mt-2 overflow-x-auto text-xs text-muted">{`1) Ask user for Verifier ID
+2) Lookup existing user in your system by Verifier ID
+3) If not found, create local profile with Verifier ID
+4) Use this ID for notifications and trust checks`}</pre>
+          </article>
+        </div>
+      </section>
+
       {info && (
         <div className="rounded-2xl border border-brand/40 bg-brand/10 p-3 text-sm">{info}</div>
       )}

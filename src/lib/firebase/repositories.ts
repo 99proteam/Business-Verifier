@@ -59,6 +59,10 @@ function generateBusinessEmployeeJoinKey() {
   return `BVJ-${randomKeyFragment(6)}-${randomKeyFragment(6)}`;
 }
 
+function generateUserPublicId() {
+  return `BVU-${randomKeyFragment(4)}-${randomKeyFragment(4)}`;
+}
+
 function normalizeHttpUrl(raw: string) {
   const value = raw.trim();
   if (!value) return "";
@@ -105,6 +109,18 @@ async function syncUserLookupRecord(
     },
     { merge: true },
   );
+}
+
+async function generateUniqueUserPublicId() {
+  const database = getDb();
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const candidate = generateUserPublicId();
+    const existing = await getDocs(
+      query(collection(database, "userLookup"), where("publicId", "==", candidate), limit(1)),
+    );
+    if (!existing.docs.length) return candidate;
+  }
+  return `BVU-${Date.now().toString(36).toUpperCase()}`;
 }
 
 function sanitizeAuditMetadata(
@@ -236,6 +252,7 @@ export interface BusinessApplicationInput {
   bankAccountLast4: string;
   publicDocumentsSummary: string;
   publicDocumentUrls?: string[];
+  questionConversationMode: "public" | "private";
   lookingForPartnership: boolean;
   partnershipCategory?: string;
   partnershipAmountMin?: number;
@@ -244,6 +261,8 @@ export interface BusinessApplicationInput {
   proDepositAmount?: number;
   proDepositLockMonths?: number;
 }
+
+export type BusinessQuestionConversationMode = "public" | "private";
 
 export interface VerificationChecklist {
   mobileVerified: boolean;
@@ -276,6 +295,35 @@ export interface BusinessApplicationRecord extends BusinessApplicationInput {
   checklistReviewedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BusinessQuestionThreadRecord {
+  id: string;
+  businessId: string;
+  businessSlug: string;
+  businessName: string;
+  ownerUid: string;
+  customerUid: string;
+  customerName: string;
+  customerEmail: string;
+  title: string;
+  mode: BusinessQuestionConversationMode;
+  participantUids: string[];
+  status: "open" | "closed";
+  lastMessage: string;
+  lastMessageByUid: string;
+  messagesCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BusinessQuestionMessageRecord {
+  id: string;
+  senderUid: string;
+  senderName: string;
+  senderRole: "customer" | "business_owner";
+  text: string;
+  createdAt: string;
 }
 
 export type ProDepositStatus = "locked" | "available" | "withdrawn" | "forfeited";
@@ -557,6 +605,8 @@ function mapBusinessApplication(snapshotId: string, data: Record<string, unknown
     bankAccountLast4: String(data.bankAccountLast4 ?? ""),
     publicDocumentsSummary: String(data.publicDocumentsSummary ?? ""),
     publicDocumentUrls: (data.publicDocumentUrls as string[]) ?? [],
+    questionConversationMode:
+      data.questionConversationMode === "private" ? "private" : "public",
     lookingForPartnership: Boolean(data.lookingForPartnership),
     partnershipCategory: data.partnershipCategory
       ? String(data.partnershipCategory)
@@ -636,10 +686,11 @@ async function fetchPrimaryBusinessByOwner(ownerUid: string) {
   const rows = await Promise.all(
     snapshots.docs.map(async (snapshot) => {
       const raw = snapshot.data();
-      if (!raw.publicBusinessKey || !raw.employeeJoinKey) {
+      if (!raw.publicBusinessKey || !raw.employeeJoinKey || !raw.questionConversationMode) {
         await updateDoc(doc(database, "businessApplications", snapshot.id), {
           publicBusinessKey: raw.publicBusinessKey || generateBusinessPublicKey(),
           employeeJoinKey: raw.employeeJoinKey || generateBusinessEmployeeJoinKey(),
+          questionConversationMode: raw.questionConversationMode || "public",
           updatedAt: serverTimestamp(),
         });
       }
@@ -647,6 +698,7 @@ async function fetchPrimaryBusinessByOwner(ownerUid: string) {
         ...raw,
         publicBusinessKey: raw.publicBusinessKey || `BVB-${snapshot.id.slice(0, 8).toUpperCase()}`,
         employeeJoinKey: raw.employeeJoinKey || null,
+        questionConversationMode: raw.questionConversationMode || "public",
       });
     }),
   );
@@ -665,6 +717,11 @@ export async function ensureUserProfile(user: User) {
   const walletRef = doc(database, "wallets", user.uid);
   const existing = await getDoc(userRef);
   const walletSnapshot = await getDoc(walletRef);
+  const existingData = existing.exists() ? (existing.data() as Record<string, unknown>) : null;
+  const publicId =
+    existingData?.publicId && String(existingData.publicId).trim()
+      ? String(existingData.publicId)
+      : await generateUniqueUserPublicId();
 
   const basePayload = {
     uid: user.uid,
@@ -672,7 +729,7 @@ export async function ensureUserProfile(user: User) {
     emailNormalized: (user.email ?? "").trim().toLowerCase(),
     displayName: user.displayName ?? "User",
     photoURL: user.photoURL ?? "",
-    publicId: `BVU-${user.uid.slice(0, 8).toUpperCase()}`,
+    publicId,
     updatedAt: serverTimestamp(),
   };
 
@@ -692,8 +749,8 @@ export async function ensureUserProfile(user: User) {
     uid: user.uid,
     email: user.email ?? "",
     displayName: user.displayName ?? "User",
-    publicId: `BVU-${user.uid.slice(0, 8).toUpperCase()}`,
-    role: existing.exists() ? String(existing.data().role ?? "customer") : "customer",
+    publicId,
+    role: existing.exists() ? String(existingData?.role ?? "customer") : "customer",
   });
 
   if (!walletSnapshot.exists()) {
@@ -736,6 +793,8 @@ export async function createBusinessApplication(
     totalAvailableDeposit: 0,
     trustBadgeCode: "",
     publicDocumentUrls: input.publicDocumentUrls ?? [],
+    questionConversationMode:
+      input.questionConversationMode === "private" ? "private" : "public",
     verificationChecklist: {
       mobileVerified: false,
       addressVerified: false,
@@ -1216,6 +1275,244 @@ export async function fetchBusinessBySlug(slug: string) {
   const row = snapshots.docs[0];
   if (!row) return null;
   return mapBusinessApplication(row.id, row.data());
+}
+
+function mapBusinessQuestionThread(snapshotId: string, data: Record<string, unknown>) {
+  return {
+    id: snapshotId,
+    businessId: String(data.businessId ?? ""),
+    businessSlug: String(data.businessSlug ?? ""),
+    businessName: String(data.businessName ?? ""),
+    ownerUid: String(data.ownerUid ?? ""),
+    customerUid: String(data.customerUid ?? ""),
+    customerName: String(data.customerName ?? "Customer"),
+    customerEmail: String(data.customerEmail ?? ""),
+    title: String(data.title ?? ""),
+    mode: data.mode === "private" ? "private" : "public",
+    participantUids: Array.isArray(data.participantUids)
+      ? (data.participantUids as string[])
+      : [],
+    status: data.status === "closed" ? "closed" : "open",
+    lastMessage: String(data.lastMessage ?? ""),
+    lastMessageByUid: String(data.lastMessageByUid ?? ""),
+    messagesCount: Number(data.messagesCount ?? 0),
+    createdAt: toISODate(data.createdAt),
+    updatedAt: toISODate(data.updatedAt),
+  } satisfies BusinessQuestionThreadRecord;
+}
+
+function mapBusinessQuestionMessage(snapshotId: string, data: Record<string, unknown>) {
+  return {
+    id: snapshotId,
+    senderUid: String(data.senderUid ?? ""),
+    senderName: String(data.senderName ?? "User"),
+    senderRole: data.senderRole === "business_owner" ? "business_owner" : "customer",
+    text: String(data.text ?? ""),
+    createdAt: toISODate(data.createdAt),
+  } satisfies BusinessQuestionMessageRecord;
+}
+
+function canViewQuestionThread(thread: BusinessQuestionThreadRecord, viewerUid?: string) {
+  if (thread.mode === "public") return true;
+  if (!viewerUid) return false;
+  return (
+    thread.ownerUid === viewerUid ||
+    thread.customerUid === viewerUid ||
+    thread.participantUids.includes(viewerUid)
+  );
+}
+
+export async function fetchBusinessQuestionThreads(payload: {
+  businessId: string;
+  viewerUid?: string;
+  limitRows?: number;
+}) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "businessApplications", payload.businessId, "questions"),
+      limit(Math.max(1, Math.min(300, Math.round(payload.limitRows ?? 200)))),
+    ),
+  );
+  const rows = snapshots.docs
+    .map((snapshot) => mapBusinessQuestionThread(snapshot.id, snapshot.data()))
+    .filter((row) => canViewQuestionThread(row, payload.viewerUid))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  return rows;
+}
+
+export async function fetchBusinessQuestionMessages(payload: {
+  businessId: string;
+  threadId: string;
+  viewerUid?: string;
+}) {
+  const database = getDb();
+  const threadRef = doc(
+    database,
+    "businessApplications",
+    payload.businessId,
+    "questions",
+    payload.threadId,
+  );
+  const threadSnapshot = await getDoc(threadRef);
+  if (!threadSnapshot.exists()) return [] as BusinessQuestionMessageRecord[];
+  const thread = mapBusinessQuestionThread(threadSnapshot.id, threadSnapshot.data());
+  if (!canViewQuestionThread(thread, payload.viewerUid)) {
+    throw new Error("You are not allowed to read this conversation.");
+  }
+  const snapshots = await getDocs(
+    query(
+      collection(
+        database,
+        "businessApplications",
+        payload.businessId,
+        "questions",
+        payload.threadId,
+        "messages",
+      ),
+      orderBy("createdAt", "asc"),
+      limit(500),
+    ),
+  );
+  return snapshots.docs.map((snapshot) => mapBusinessQuestionMessage(snapshot.id, snapshot.data()));
+}
+
+export async function createBusinessQuestionThread(payload: {
+  businessId: string;
+  customerUid: string;
+  customerName: string;
+  customerEmail: string;
+  title: string;
+  text: string;
+}) {
+  const database = getDb();
+  const business = await fetchBusinessApplicationById(payload.businessId);
+  if (!business || business.status !== "approved") {
+    throw new Error("Business listing not found.");
+  }
+  const title = payload.title.trim();
+  const text = payload.text.trim();
+  if (title.length < 3) {
+    throw new Error("Question title should be at least 3 characters.");
+  }
+  if (text.length < 6) {
+    throw new Error("Question message should be at least 6 characters.");
+  }
+  const mode: BusinessQuestionConversationMode =
+    business.questionConversationMode === "private" ? "private" : "public";
+  const threadRef = await addDoc(
+    collection(database, "businessApplications", business.id, "questions"),
+    {
+      businessId: business.id,
+      businessSlug: business.slug,
+      businessName: business.businessName,
+      ownerUid: business.ownerUid,
+      customerUid: payload.customerUid,
+      customerName: payload.customerName,
+      customerEmail: payload.customerEmail,
+      title,
+      mode,
+      participantUids: [payload.customerUid, business.ownerUid],
+      status: "open",
+      lastMessage: text,
+      lastMessageByUid: payload.customerUid,
+      messagesCount: 1,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+  );
+  await addDoc(
+    collection(
+      database,
+      "businessApplications",
+      business.id,
+      "questions",
+      threadRef.id,
+      "messages",
+    ),
+    {
+      senderUid: payload.customerUid,
+      senderName: payload.customerName,
+      senderRole: "customer",
+      text,
+      createdAt: serverTimestamp(),
+    },
+  );
+  return {
+    threadId: threadRef.id,
+    mode,
+  };
+}
+
+export async function sendBusinessQuestionMessage(payload: {
+  businessId: string;
+  threadId: string;
+  senderUid: string;
+  senderName: string;
+  text: string;
+}) {
+  const database = getDb();
+  const threadRef = doc(
+    database,
+    "businessApplications",
+    payload.businessId,
+    "questions",
+    payload.threadId,
+  );
+  const threadSnapshot = await getDoc(threadRef);
+  if (!threadSnapshot.exists()) {
+    throw new Error("Conversation not found.");
+  }
+  const thread = mapBusinessQuestionThread(threadSnapshot.id, threadSnapshot.data());
+  if (
+    payload.senderUid !== thread.customerUid &&
+    payload.senderUid !== thread.ownerUid &&
+    !thread.participantUids.includes(payload.senderUid)
+  ) {
+    throw new Error("You are not allowed to send message in this conversation.");
+  }
+  const text = payload.text.trim();
+  if (text.length < 1) {
+    throw new Error("Message cannot be empty.");
+  }
+  await addDoc(
+    collection(
+      database,
+      "businessApplications",
+      payload.businessId,
+      "questions",
+      payload.threadId,
+      "messages",
+    ),
+    {
+      senderUid: payload.senderUid,
+      senderName: payload.senderName,
+      senderRole: payload.senderUid === thread.ownerUid ? "business_owner" : "customer",
+      text,
+      createdAt: serverTimestamp(),
+    },
+  );
+  await updateDoc(threadRef, {
+    lastMessage: text,
+    lastMessageByUid: payload.senderUid,
+    messagesCount: increment(1),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function updateBusinessQuestionConversationMode(payload: {
+  ownerUid: string;
+  mode: BusinessQuestionConversationMode;
+}) {
+  const database = getDb();
+  const business = await fetchPrimaryBusinessByOwner(payload.ownerUid);
+  if (!business) {
+    throw new Error("Business profile not found.");
+  }
+  await updateDoc(doc(database, "businessApplications", business.id), {
+    questionConversationMode: payload.mode,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 async function refreshBusinessDepositTotals(businessId: string) {
@@ -1721,6 +2018,7 @@ type UserLookupResult = {
   displayName: string;
   email: string;
   role: string;
+  publicId?: string;
 };
 
 function mapUserIdentityProfile(
@@ -1789,6 +2087,7 @@ async function findUserByEmail(emailInput: string) {
       displayName: String(data.displayName ?? "User"),
       email: String(data.email ?? normalized),
       role: String(data.role ?? "customer"),
+      publicId: data.publicId ? String(data.publicId) : undefined,
     } satisfies UserLookupResult;
   }
 
@@ -1803,6 +2102,7 @@ async function findUserByEmail(emailInput: string) {
       displayName: String(data.displayName ?? "User"),
       email: String(data.email ?? normalized),
       role: String(data.role ?? "customer"),
+      publicId: data.publicId ? String(data.publicId) : undefined,
     } satisfies UserLookupResult;
   }
 
@@ -1817,6 +2117,7 @@ async function findUserByEmail(emailInput: string) {
     displayName: String(data.displayName ?? "User"),
     email: String(data.email ?? email),
     role: String(data.role ?? "customer"),
+    publicId: data.publicId ? String(data.publicId) : undefined,
   } satisfies UserLookupResult;
 }
 
@@ -1883,6 +2184,9 @@ async function attachEmployeeToBusiness(payload: {
     return false;
   }
   const employeeTitle = payload.title?.trim() || "Team member";
+  const employeePublicId =
+    payload.employee.publicId ||
+    (await getUserIdentityProfileOrThrow(payload.employee.uid)).publicId;
   await setDoc(employeeRef, {
     employeeUid: payload.employee.uid,
     employeeName: payload.employee.displayName,
@@ -1911,7 +2215,7 @@ async function attachEmployeeToBusiness(payload: {
     uid: payload.employee.uid,
     email: payload.employee.email,
     displayName: payload.employee.displayName,
-    publicId: `BVU-${payload.employee.uid.slice(0, 8).toUpperCase()}`,
+    publicId: employeePublicId,
     role: "employee",
   });
   return true;
@@ -1974,6 +2278,7 @@ export async function requestEmployeeBusinessAccess(payload: {
     email: employeeProfile.email,
     displayName: employeeProfile.displayName,
     role: employeeProfile.role,
+    publicId: employeeProfile.publicId,
   };
   const requestRef = doc(
     database,
@@ -2049,7 +2354,7 @@ export async function requestEmployeeBusinessAccess(payload: {
     uid: payload.employeeUid,
     email: payload.employeeEmail,
     displayName: payload.employeeName,
-    publicId: `BVU-${payload.employeeUid.slice(0, 8).toUpperCase()}`,
+    publicId: employeeProfile.publicId,
     role: "employee",
   });
   return {
@@ -2355,6 +2660,24 @@ export async function fetchEmployeePerformanceForEmployee(employeeUid: string) {
 
 export async function fetchCurrentUserIdentityProfile(userUid: string) {
   return getUserIdentityProfileOrThrow(userUid);
+}
+
+export async function regenerateCurrentUserPublicId(userUid: string) {
+  const database = getDb();
+  const profile = await getUserIdentityProfileOrThrow(userUid);
+  const nextPublicId = await generateUniqueUserPublicId();
+  await updateDoc(doc(database, "users", userUid), {
+    publicId: nextPublicId,
+    updatedAt: serverTimestamp(),
+  });
+  await syncUserLookupRecord({
+    uid: userUid,
+    email: profile.email,
+    displayName: profile.displayName,
+    publicId: nextPublicId,
+    role: profile.role,
+  });
+  return nextPublicId;
 }
 
 export async function updateCurrentUserRoleSelection(payload: {
@@ -8320,11 +8643,26 @@ function mapMembershipPurchase(snapshotId: string, data: Record<string, unknown>
 
 async function fetchCustomerPublicId(customerUid: string) {
   const database = getDb();
-  const userSnapshot = await getDoc(doc(database, "users", customerUid));
+  const userRef = doc(database, "users", customerUid);
+  const userSnapshot = await getDoc(userRef);
   if (!userSnapshot.exists()) {
     throw new Error("Customer profile not found.");
   }
-  return String(userSnapshot.data().publicId ?? `BVU-${customerUid.slice(0, 8).toUpperCase()}`);
+  const existing = String(userSnapshot.data().publicId ?? "").trim();
+  if (existing) return existing;
+  const generated = await generateUniqueUserPublicId();
+  await updateDoc(userRef, {
+    publicId: generated,
+    updatedAt: serverTimestamp(),
+  });
+  await syncUserLookupRecord({
+    uid: customerUid,
+    email: String(userSnapshot.data().email ?? ""),
+    displayName: String(userSnapshot.data().displayName ?? "Customer"),
+    publicId: generated,
+    role: String(userSnapshot.data().role ?? "customer"),
+  });
+  return generated;
 }
 
 export async function fetchVerifierCustomerMembership(customerUid: string) {

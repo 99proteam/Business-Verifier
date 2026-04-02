@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BusinessQuestionsSection } from "@/components/business/business-questions-section";
 import {
   BusinessApplicationRecord,
   BusinessServiceRecord,
@@ -205,6 +206,12 @@ export function PublicBusinessProfile({
           )}
         </div>
       </section>
+
+      <BusinessQuestionsSection
+        businessId={business.id}
+        businessName={business.businessName}
+        conversationMode={business.questionConversationMode}
+      />
     </div>
   );
 }

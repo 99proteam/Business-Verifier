@@ -41,6 +41,7 @@ const businessSchema = z
     publicDocumentsSummary: z
       .string()
       .min(12, "List the public verification documents."),
+    questionConversationMode: z.enum(["public", "private"]),
     lookingForPartnership: z.boolean(),
     partnershipCategory: z.string().optional(),
     partnershipAmountMin: z.coerce.number().optional(),
@@ -117,6 +118,7 @@ export function BusinessOnboardingForm() {
       mode: "online",
       stage: "running",
       yearsInField: 0,
+      questionConversationMode: "public",
       lookingForPartnership: false,
       wantsProPlan: false,
       proDepositLockMonths: 6,
@@ -262,6 +264,14 @@ export function BusinessOnboardingForm() {
             <select className={fieldClass} {...register("stage")}>
               <option value="idea">Idea stage</option>
               <option value="running">Running stage</option>
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm">Customer question visibility</span>
+            <select className={fieldClass} {...register("questionConversationMode")}>
+              <option value="public">Public (all visitors can see conversation)</option>
+              <option value="private">Private (only business owner and customer)</option>
             </select>
           </label>
 
