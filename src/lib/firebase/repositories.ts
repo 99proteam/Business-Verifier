@@ -3147,11 +3147,12 @@ export async function createSupportTicket(input: SupportTicketInput) {
       }
     }
   }
+  const uniqueParticipants = Array.from(new Set(participantUids));
   const ticketRef = await addDoc(collection(database, "supportTickets"), {
     ...input,
     businessName: normalizedBusinessName,
     status: "open",
-    participantUids: Array.from(new Set(participantUids)),
+    participantUids: uniqueParticipants,
     escalationCount: 0,
     reopenedCount: 0,
     lastMessagePreview: input.description.slice(0, 160),
@@ -3167,6 +3168,28 @@ export async function createSupportTicket(input: SupportTicketInput) {
     text: `Ticket created: ${input.description}\nExpected: ${input.expectedOutcome}`,
     attachments: input.evidenceUrls,
     createdAt: serverTimestamp(),
+  });
+
+  await notifyUserInAppAndMobile({
+    recipientUid: input.customerUid,
+    ownerUid: input.customerUid,
+    actorUid: input.customerUid,
+    source: "support_ticket",
+    category: "updates",
+    title: `Ticket created: ${input.title}`,
+    message: `Your ticket was created for ${normalizedBusinessName}.`,
+    deepLink: `/dashboard/tickets/${ticketRef.id}`,
+  });
+  await notifyManyUsersInAppAndMobile({
+    recipientUids: uniqueParticipants,
+    excludeUid: input.customerUid,
+    ownerUid: input.customerUid,
+    actorUid: input.customerUid,
+    source: "support_ticket",
+    category: "emergency",
+    title: `New dispute ticket: ${input.title}`,
+    message: `${input.customerName} opened a support ticket for ${normalizedBusinessName}.`,
+    deepLink: `/dashboard/tickets/${ticketRef.id}`,
   });
 
   return ticketRef.id;
@@ -3271,7 +3294,8 @@ export async function addSupportTicketMessage(
     throw new Error("Ticket not found.");
   }
 
-  const currentStatus = current.data().status as SupportTicketStatus;
+  const ticketData = current.data() as Record<string, unknown>;
+  const currentStatus = ticketData.status as SupportTicketStatus;
   const nextStatus =
     currentStatus === "resolved" ||
     currentStatus === "refunded" ||
@@ -3294,6 +3318,22 @@ export async function addSupportTicketMessage(
     participantUids: arrayUnion(payload.senderUid),
     updatedAt: serverTimestamp(),
   });
+
+  await notifyManyUsersInAppAndMobile({
+    recipientUids: [
+      ...((ticketData.participantUids as string[]) ?? []),
+      String(ticketData.customerUid ?? ""),
+      payload.senderUid,
+    ],
+    excludeUid: payload.senderUid,
+    ownerUid: payload.senderUid,
+    actorUid: payload.senderUid,
+    source: "support_ticket_message",
+    category: "updates",
+    title: `Ticket update: ${String(ticketData.title ?? ticketId)}`,
+    message: `${payload.senderName}: ${payload.text.slice(0, 180)}`,
+    deepLink: `/dashboard/tickets/${ticketId}`,
+  });
 }
 
 export async function escalateSupportTicketToAdmin(
@@ -3303,6 +3343,10 @@ export async function escalateSupportTicketToAdmin(
 ) {
   const database = getDb();
   const ticketRef = doc(database, "supportTickets", ticketId);
+  const ticketSnapshot = await getDoc(ticketRef);
+  const ticketData = ticketSnapshot.exists()
+    ? (ticketSnapshot.data() as Record<string, unknown>)
+    : {};
   await updateDoc(ticketRef, {
     status: "awaiting_admin",
     escalationCount: increment(1),
@@ -3318,6 +3362,21 @@ export async function escalateSupportTicketToAdmin(
     attachments: [],
     createdAt: serverTimestamp(),
   });
+  await notifyManyUsersInAppAndMobile({
+    recipientUids: [
+      ...((ticketData.participantUids as string[]) ?? []),
+      String(ticketData.customerUid ?? ""),
+      String(ticketData.lastMessageBy ?? ""),
+    ],
+    excludeUid: actorUid,
+    ownerUid: actorUid,
+    actorUid,
+    source: "support_ticket_escalation",
+    category: "emergency",
+    title: `Admin requested on ticket ${String(ticketData.title ?? ticketId)}`,
+    message: `${actorName} requested admin intervention.`,
+    deepLink: `/dashboard/tickets/${ticketId}`,
+  });
 }
 
 export async function adminFinalizeSupportTicket(
@@ -3331,6 +3390,10 @@ export async function adminFinalizeSupportTicket(
 ) {
   const database = getDb();
   const ticketRef = doc(database, "supportTickets", ticketId);
+  const ticketSnapshot = await getDoc(ticketRef);
+  const ticketData = ticketSnapshot.exists()
+    ? (ticketSnapshot.data() as Record<string, unknown>)
+    : {};
   await updateDoc(ticketRef, {
     status: payload.action,
     resolutionReason: payload.reason,
@@ -3365,6 +3428,24 @@ export async function adminFinalizeSupportTicket(
       reason: payload.reason,
     },
   });
+  await notifyManyUsersInAppAndMobile({
+    recipientUids: [
+      ...((ticketData.participantUids as string[]) ?? []),
+      String(ticketData.customerUid ?? ""),
+      String(ticketData.lastMessageBy ?? ""),
+    ],
+    excludeUid: adminUid,
+    ownerUid: adminUid,
+    actorUid: adminUid,
+    source: "support_ticket_finalized",
+    category: payload.action === "refunded" ? "emergency" : "updates",
+    title:
+      payload.action === "refunded"
+        ? `Ticket refunded: ${String(ticketData.title ?? ticketId)}`
+        : `Ticket resolved: ${String(ticketData.title ?? ticketId)}`,
+    message: payload.reason,
+    deepLink: `/dashboard/tickets/${ticketId}`,
+  });
 }
 
 export async function reopenSupportTicket(
@@ -3375,6 +3456,10 @@ export async function reopenSupportTicket(
 ) {
   const database = getDb();
   const ticketRef = doc(database, "supportTickets", ticketId);
+  const ticketSnapshot = await getDoc(ticketRef);
+  const ticketData = ticketSnapshot.exists()
+    ? (ticketSnapshot.data() as Record<string, unknown>)
+    : {};
   await updateDoc(ticketRef, {
     status: "open",
     reopenedCount: increment(1),
@@ -3390,6 +3475,21 @@ export async function reopenSupportTicket(
     attachments: [],
     createdAt: serverTimestamp(),
   });
+  await notifyManyUsersInAppAndMobile({
+    recipientUids: [
+      ...((ticketData.participantUids as string[]) ?? []),
+      String(ticketData.customerUid ?? ""),
+      String(ticketData.lastMessageBy ?? ""),
+    ],
+    excludeUid: actorUid,
+    ownerUid: actorUid,
+    actorUid,
+    source: "support_ticket_reopened",
+    category: "updates",
+    title: `Ticket reopened: ${String(ticketData.title ?? ticketId)}`,
+    message: reason,
+    deepLink: `/dashboard/tickets/${ticketId}`,
+  });
 }
 
 export async function closeSupportTicket(
@@ -3399,6 +3499,10 @@ export async function closeSupportTicket(
 ) {
   const database = getDb();
   const ticketRef = doc(database, "supportTickets", ticketId);
+  const ticketSnapshot = await getDoc(ticketRef);
+  const ticketData = ticketSnapshot.exists()
+    ? (ticketSnapshot.data() as Record<string, unknown>)
+    : {};
   await updateDoc(ticketRef, {
     status: "closed",
     participantUids: arrayUnion(actorUid),
@@ -3412,6 +3516,21 @@ export async function closeSupportTicket(
     text: "Ticket closed by user confirmation.",
     attachments: [],
     createdAt: serverTimestamp(),
+  });
+  await notifyManyUsersInAppAndMobile({
+    recipientUids: [
+      ...((ticketData.participantUids as string[]) ?? []),
+      String(ticketData.customerUid ?? ""),
+      String(ticketData.lastMessageBy ?? ""),
+    ],
+    excludeUid: actorUid,
+    ownerUid: actorUid,
+    actorUid,
+    source: "support_ticket_closed",
+    category: "updates",
+    title: `Ticket closed: ${String(ticketData.title ?? ticketId)}`,
+    message: `${actorName} closed this ticket.`,
+    deepLink: `/dashboard/tickets/${ticketId}`,
   });
 }
 
@@ -4573,8 +4692,8 @@ export async function sendProductOfferToFavoriteCustomers(payload: {
 
   const createdAt = new Date().toISOString();
   const chunks: string[][] = [];
-  for (let i = 0; i < recipientUids.length; i += 400) {
-    chunks.push(recipientUids.slice(i, i + 400));
+  for (let i = 0; i < recipientUids.length; i += 200) {
+    chunks.push(recipientUids.slice(i, i + 200));
   }
 
   for (const chunk of chunks) {
@@ -4593,6 +4712,25 @@ export async function sendProductOfferToFavoriteCustomers(payload: {
         productLink: `/products/${product.uniqueLinkSlug}`,
         isSpam: false,
         createdAt: serverTimestamp(),
+      });
+      const queueRef = doc(collection(database, "mobilePushQueue"));
+      batch.set(queueRef, {
+        recipientUid: uid,
+        ownerUid: payload.ownerUid,
+        actorUid: payload.ownerUid,
+        source: "product_offer_broadcast",
+        category: "offers",
+        title: cleanTitle,
+        message: cleanMessage,
+        deepLink: `/products/${product.uniqueLinkSlug}`,
+        notificationPath: notificationRef.path,
+        status: "pending",
+        attemptCount: 0,
+        deliveredCount: 0,
+        failureCount: 0,
+        lastError: null,
+        queuedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
     }
     await batch.commit();
@@ -5080,6 +5218,27 @@ async function createOrderAndEscrowFromProduct(params: {
     }
   }
 
+  await notifyUserInAppAndMobile({
+    recipientUid: params.customer.uid,
+    ownerUid: params.customer.uid,
+    actorUid: params.customer.uid,
+    source: "order_created",
+    category: "updates",
+    title: `Order confirmed: ${params.product.title}`,
+    message: `Your order ${orderRef.id} is confirmed and escrow is active.`,
+    deepLink: `/dashboard/orders/${orderRef.id}`,
+  });
+  await notifyUserInAppAndMobile({
+    recipientUid: params.product.ownerUid,
+    ownerUid: params.customer.uid,
+    actorUid: params.customer.uid,
+    source: "order_created",
+    category: "offers",
+    title: `New order received: ${params.product.title}`,
+    message: `Order ${orderRef.id} was placed by ${params.customer.name}.`,
+    deepLink: `/dashboard/business/orders`,
+  });
+
   return orderRef.id;
 }
 
@@ -5219,6 +5378,27 @@ export async function requestOrderRefund(
     updatedAt: serverTimestamp(),
   });
 
+  await notifyUserInAppAndMobile({
+    recipientUid: order.customerUid,
+    ownerUid: payload.customerUid,
+    actorUid: payload.customerUid,
+    source: "order_refund_requested",
+    category: "updates",
+    title: `Refund request submitted: ${order.productTitle}`,
+    message: `Your request is under review. Ticket: ${ticketId}.`,
+    deepLink: `/dashboard/orders/${orderId}`,
+  });
+  await notifyUserInAppAndMobile({
+    recipientUid: order.businessOwnerUid,
+    ownerUid: payload.customerUid,
+    actorUid: payload.customerUid,
+    source: "order_refund_requested",
+    category: "emergency",
+    title: `Refund requested for order ${orderId}`,
+    message: payload.reason,
+    deepLink: `/dashboard/business/orders`,
+  });
+
   return ticketId;
 }
 
@@ -5278,6 +5458,17 @@ export async function adminApproveOrderRefund(
       reason,
       refundTicketId: order.refundTicketId ?? null,
     },
+  });
+  await notifyManyUsersInAppAndMobile({
+    recipientUids: [order.customerUid, order.businessOwnerUid],
+    excludeUid: adminUid,
+    ownerUid: adminUid,
+    actorUid: adminUid,
+    source: "order_refunded",
+    category: "emergency",
+    title: `Order refunded: ${order.productTitle}`,
+    message: `Refund approved by admin. Reason: ${reason}`,
+    deepLink: `/dashboard/orders/${orderId}`,
   });
 }
 
@@ -5339,6 +5530,17 @@ export async function adminReleaseEscrowOrder(
       amount: order.amount,
       businessOwnerUid: order.businessOwnerUid,
     },
+  });
+  await notifyManyUsersInAppAndMobile({
+    recipientUids: [order.customerUid, order.businessOwnerUid],
+    excludeUid: adminUid,
+    ownerUid: adminUid,
+    actorUid: adminUid,
+    source: "order_released",
+    category: "updates",
+    title: `Escrow released: ${order.productTitle}`,
+    message: `Order ${orderId} escrow was released successfully.`,
+    deepLink: `/dashboard/orders/${orderId}`,
   });
 }
 
@@ -6304,6 +6506,16 @@ export async function markPaymentIntentAsPaid(payload: {
       reason: `Gateway top-up (${intent.provider})`,
       type: "topup_credit",
       referenceId: intent.id,
+    });
+    await notifyUserInAppAndMobile({
+      recipientUid: intent.ownerUid,
+      ownerUid: intent.ownerUid,
+      actorUid: payload.actorUid,
+      source: "wallet_topup",
+      category: "updates",
+      title: "Wallet top-up successful",
+      message: `INR ${intent.amount} added to your wallet.`,
+      deepLink: `/dashboard/wallet`,
     });
   } else {
     if (!intent.productSlug) throw new Error("Checkout payment intent is missing product slug.");
@@ -7278,6 +7490,99 @@ function mapUserNotification(snapshotId: string, data: Record<string, unknown>) 
   } satisfies UserNotificationRecord;
 }
 
+async function enqueueMobilePushForUser(payload: {
+  recipientUid: string;
+  ownerUid: string;
+  actorUid?: string;
+  source: string;
+  category: NotificationCategory;
+  title: string;
+  message: string;
+  deepLink?: string;
+  notificationPath?: string;
+}) {
+  const database = getDb();
+  await addDoc(collection(database, "mobilePushQueue"), {
+    recipientUid: payload.recipientUid,
+    ownerUid: payload.ownerUid,
+    actorUid: payload.actorUid?.trim() || payload.ownerUid,
+    source: payload.source,
+    category: payload.category,
+    title: payload.title,
+    message: payload.message,
+    deepLink: payload.deepLink?.trim() || "/dashboard/notifications",
+    notificationPath: payload.notificationPath?.trim() || null,
+    status: "pending",
+    attemptCount: 0,
+    deliveredCount: 0,
+    failureCount: 0,
+    lastError: null,
+    queuedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+async function notifyUserInAppAndMobile(payload: {
+  recipientUid: string;
+  ownerUid: string;
+  actorUid?: string;
+  source: string;
+  category: NotificationCategory;
+  title: string;
+  message: string;
+  deepLink?: string;
+}) {
+  const database = getDb();
+  const notificationRef = await addDoc(collection(database, "users", payload.recipientUid, "notifications"), {
+    endpointId: payload.source,
+    ownerUid: payload.ownerUid,
+    category: payload.category,
+    title: payload.title,
+    message: payload.message,
+    deepLink: payload.deepLink?.trim() || "/dashboard/notifications",
+    isSpam: false,
+    createdAt: serverTimestamp(),
+  });
+  await enqueueMobilePushForUser({
+    recipientUid: payload.recipientUid,
+    ownerUid: payload.ownerUid,
+    actorUid: payload.actorUid,
+    source: payload.source,
+    category: payload.category,
+    title: payload.title,
+    message: payload.message,
+    deepLink: payload.deepLink,
+    notificationPath: notificationRef.path,
+  });
+}
+
+async function notifyManyUsersInAppAndMobile(payload: {
+  recipientUids: string[];
+  excludeUid?: string;
+  ownerUid: string;
+  actorUid?: string;
+  source: string;
+  category: NotificationCategory;
+  title: string;
+  message: string;
+  deepLink?: string;
+}) {
+  const uniqueRecipients = [...new Set(payload.recipientUids.map((row) => row.trim()).filter(Boolean))];
+  for (const recipientUid of uniqueRecipients) {
+    if (payload.excludeUid && recipientUid === payload.excludeUid) continue;
+    await notifyUserInAppAndMobile({
+      recipientUid,
+      ownerUid: payload.ownerUid,
+      actorUid: payload.actorUid,
+      source: payload.source,
+      category: payload.category,
+      title: payload.title,
+      message: payload.message,
+      deepLink: payload.deepLink,
+    });
+  }
+}
+
 async function getUserUidByPublicId(publicId: string) {
   const database = getDb();
   const snapshots = await getDocs(
@@ -7442,7 +7747,7 @@ export async function sendNotificationViaEndpoint(payload: {
       failed += 1;
       continue;
     }
-    await addDoc(collection(database, "users", uid, "notifications"), {
+    const notificationRef = await addDoc(collection(database, "users", uid, "notifications"), {
       endpointId: payload.endpointId,
       ownerUid: payload.ownerUid,
       category: payload.category,
@@ -7450,6 +7755,16 @@ export async function sendNotificationViaEndpoint(payload: {
       message: payload.message,
       isSpam: false,
       createdAt: serverTimestamp(),
+    });
+    await enqueueMobilePushForUser({
+      recipientUid: uid,
+      ownerUid: payload.ownerUid,
+      source: "notification_endpoint",
+      category: payload.category,
+      title: payload.title,
+      message: payload.message,
+      deepLink: "/dashboard/notifications",
+      notificationPath: notificationRef.path,
     });
     delivered += 1;
   }
@@ -8525,7 +8840,7 @@ export async function runBillingMaintenance(payload: {
       now - lastReminderAt >= reminderIntervalMs;
 
     if (shouldSendReminder) {
-      await addDoc(collection(database, "users", invoice.ownerUid, "notifications"), {
+      const notificationRef = await addDoc(collection(database, "users", invoice.ownerUid, "notifications"), {
         endpointId: "system-billing",
         ownerUid: "system",
         category: "emergency",
@@ -8535,6 +8850,19 @@ export async function runBillingMaintenance(payload: {
         }.`,
         isSpam: false,
         createdAt: serverTimestamp(),
+      });
+      await enqueueMobilePushForUser({
+        recipientUid: invoice.ownerUid,
+        ownerUid: "system",
+        actorUid: payload.adminUid,
+        source: "billing_overdue",
+        category: "emergency",
+        title: `Invoice overdue: ${invoice.monthKey}`,
+        message: `Your invoice ${invoice.id} is overdue. Current due amount INR ${
+          Number(updates.totalAmount ?? invoice.totalAmount)
+        }.`,
+        deepLink: `/dashboard/business/billing`,
+        notificationPath: notificationRef.path,
       });
       updates.reminderCount = invoice.reminderCount + 1;
       updates.lastReminderAt = serverTimestamp();

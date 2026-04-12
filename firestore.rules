@@ -155,6 +155,10 @@ service cloud.firestore {
       allow update, delete: if isSelf(userId) || isAdmin();
     }
 
+    match /users/{userId}/mobilePushTokens/{tokenId} {
+      allow read, write: if isSelf(userId) || isAdmin();
+    }
+
     match /users/{userId}/employments/{employmentId} {
       allow read: if isSelf(userId) || isAdmin() || (
         isAuthenticated() &&
@@ -203,6 +207,23 @@ service cloud.firestore {
 
     match /notificationDeliveryLogs/{logId} {
       allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /mobilePushQueue/{queueId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() &&
+        (
+          (resource.data.recipientUid is string && resource.data.recipientUid == request.auth.uid) ||
+          (resource.data.ownerUid is string && resource.data.ownerUid == request.auth.uid) ||
+          (resource.data.actorUid is string && resource.data.actorUid == request.auth.uid)
+        )
+      );
+      allow create: if isAuthenticated() &&
+        request.resource.data.recipientUid is string &&
+        request.resource.data.ownerUid is string &&
+        request.resource.data.actorUid is string &&
+        request.resource.data.actorUid == request.auth.uid;
+      allow update, delete: if isAdmin();
     }
 
     match /membershipBusinessPrograms/{programId} {

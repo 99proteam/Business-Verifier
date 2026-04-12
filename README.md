@@ -5,6 +5,7 @@ Business Verifier is a Next.js + Firebase trust SaaS platform for online/offline
 ## Stack
 - Next.js App Router + TypeScript + Tailwind CSS
 - Firebase Auth, Firestore, Storage
+- Flutter mobile app (shared Firebase data model)
 - Razorpay / RazorpayX (with mock provider fallback)
 - Vercel Cron for automation orchestration
 
@@ -23,6 +24,8 @@ Business Verifier is a Next.js + Firebase trust SaaS platform for online/offline
 - Groups (business-only create, join/unjoin, admin-only/public messaging, widget)
 - Employee moderator controls for groups
 - Notification API (target by user public IDs) + spam handling + delivery logs
+- Mobile push queue (`mobilePushQueue`) + FCM token registry (`users/{uid}/mobilePushTokens`)
+- Truecaller verification integration API for customer/business identity checks
 - Notification endpoint lifecycle with permanent/temporary IDs + disconnect control
 - Ads (campaign management, city targeting, impressions/clicks, CTR, CSV exports)
 - Ad tag plans (monthly/yearly + custom plans) configurable by admin
@@ -50,6 +53,8 @@ copy .env.local.example .env.local
 - payment/payout secrets
 - optional PayPal + currency config: `NEXT_PUBLIC_PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_ENV`, `USD_INR_RATE`
 - cron secrets
+- mobile push secrets (`MOBILE_PUSH_DISPATCH_SECRET`) and toggles (`CRON_ENABLE_MOBILE_PUSH`, `CRON_MOBILE_PUSH_LIMIT`)
+- optional Truecaller adapter secrets (`TRUECALLER_VERIFY_ENDPOINT`, `TRUECALLER_API_KEY`, `TRUECALLER_APP_KEY`)
 
 4. Run dev server
 ```bash
@@ -101,12 +106,22 @@ Notes:
 - `GET /api/cron/system`
 - `POST /api/admin/reconciliation/export`
 - `POST /api/admin/geo/import`
+- `POST /api/mobile/push/register`
+- `POST /api/mobile/push/unregister`
+- `POST /api/mobile/push/dispatch`
+- `GET/POST /api/auth/truecaller/verify`
 
 Auth notes:
 - `POST /api/payments/intents/create` and `POST /api/payments/intents/confirm` require `Authorization: Bearer <Firebase ID token>`.
 - `POST /api/payouts/withdrawals/review` and `POST /api/payouts/withdrawals/execute` require admin bearer token (email in `ADMIN_EMAILS`).
 - `POST /api/admin/reconciliation/export` and `POST /api/admin/geo/import` accept admin bearer token or their existing secret headers.
 - `POST /api/automation/*` endpoints accept admin bearer token or `x-cron-secret` (`AUTOMATION_CRON_SECRET`).
+- `POST /api/mobile/push/dispatch` accepts admin bearer token or `x-mobile-push-secret` (`MOBILE_PUSH_DISPATCH_SECRET`).
+
+## Mobile App (Flutter)
+- Folder: `mobile-app`
+- The mobile app and website share the same Firebase collections, so changes sync in real time across both.
+- Setup instructions: `mobile-app/README.md`
 
 ## Membership Offline CSV Template
 - `public/templates/membership-offline-transactions-template.csv`

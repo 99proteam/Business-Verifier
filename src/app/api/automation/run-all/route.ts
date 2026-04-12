@@ -8,6 +8,7 @@ import {
 } from "@/lib/firebase/repositories";
 import { enforceApiRateLimit, getRequestIdentifier } from "@/lib/api/rate-limit";
 import { AuthApiError, requireAdminOrSecret } from "@/lib/server/auth";
+import { dispatchMobilePushQueue } from "@/lib/server/mobile-push";
 
 export const runtime = "nodejs";
 
@@ -42,6 +43,9 @@ export async function POST(request: NextRequest) {
       ? auth.name || "Admin"
       : String(body.adminName ?? "System Automation").trim() || "System Automation";
     const monthKey = body.monthKey ? String(body.monthKey).trim() : undefined;
+    const runMobilePush =
+      String(body.runMobilePush ?? "true").trim().toLowerCase() !== "false";
+    const mobilePushLimit = Number(body.mobilePushLimit ?? 200);
 
     const [invoiceIds, escrowResult, depositResult, billingResult, catalogResult] = await Promise.all([
       generateInvoicesForAllBusinesses(monthKey),
@@ -61,6 +65,23 @@ export async function POST(request: NextRequest) {
         force: true,
       }),
     ]);
+    let mobilePushResult: Record<string, unknown> | null = null;
+    if (runMobilePush && String(process.env.AUTOMATION_ENABLE_MOBILE_PUSH ?? "true").toLowerCase() !== "false") {
+      try {
+        mobilePushResult = await dispatchMobilePushQueue({
+          limit: mobilePushLimit,
+          trigger: "api",
+        });
+      } catch (mobilePushError) {
+        mobilePushResult = {
+          ok: false,
+          error:
+            mobilePushError instanceof Error
+              ? mobilePushError.message
+              : "Unexpected mobile push dispatch error.",
+        };
+      }
+    }
 
     return NextResponse.json({
       ok: true,
@@ -70,6 +91,7 @@ export async function POST(request: NextRequest) {
         depositResult,
         billingResult,
         catalogResult,
+        mobilePushResult,
       },
       rateLimit,
     });

@@ -10,6 +10,7 @@ import {
   runBillingMaintenance,
 } from "@/lib/firebase/repositories";
 import { sendOpsAlert } from "@/lib/server/ops/alerts";
+import { dispatchMobilePushQueue } from "@/lib/server/mobile-push";
 
 export const runtime = "nodejs";
 
@@ -62,6 +63,24 @@ export async function GET(request: NextRequest) {
       runBillingMaintenance({ adminUid }),
       runDueCatalogIntegrationSync({ trigger: "scheduled" }),
     ]);
+    let mobilePushResult: Record<string, unknown> | null = null;
+    if (String(process.env.CRON_ENABLE_MOBILE_PUSH ?? "true").toLowerCase() !== "false") {
+      try {
+        const dispatched = await dispatchMobilePushQueue({
+          limit: Number(process.env.CRON_MOBILE_PUSH_LIMIT ?? "200"),
+          trigger: "cron",
+        });
+        mobilePushResult = dispatched;
+      } catch (mobilePushError) {
+        mobilePushResult = {
+          ok: false,
+          error:
+            mobilePushError instanceof Error
+              ? mobilePushError.message
+              : "Unexpected mobile push dispatch error.",
+        };
+      }
+    }
 
     await recordAutomationJobRun({
       jobKey: "automation_bundle",
@@ -74,6 +93,9 @@ export async function GET(request: NextRequest) {
         depositsReleased: depositResult.released,
         reminders: billingResult.remindersSent,
         catalogSynced: catalogResult.synced,
+        mobilePushQueued: mobilePushResult && "scanned" in mobilePushResult
+          ? Number(mobilePushResult.scanned)
+          : 0,
       },
     });
 
@@ -131,6 +153,7 @@ export async function GET(request: NextRequest) {
         depositResult,
         billingResult,
         catalogResult,
+        mobilePushResult,
         distributionResult,
       },
     });
