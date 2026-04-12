@@ -16,6 +16,10 @@ import {
   fetchPublicDigitalProducts,
   fetchPublicGroups,
 } from "@/lib/firebase/repositories";
+import {
+  fetchBusinessVerificationTierBySlug,
+  fetchPublicTrustTimelineByBusinessSlug,
+} from "@/lib/firebase/growth-repositories";
 
 type ExternalProductRecord = {
   id: string;
@@ -128,13 +132,18 @@ export async function getCachedBusinessProfileBundle(slug: string) {
           ledger: [],
           products: [],
           services: [],
+          verificationTier: null,
+          trustTimeline: [],
         };
       }
-      const [badge, ledger, products, services] = await Promise.all([
+      const [badge, ledger, products, services, verificationTier, trustTimeline] =
+        await Promise.all([
         fetchPublicBusinessTrustBadgeBySlug(slug),
         fetchProDepositLedgerByBusinessId(business.id),
         fetchDigitalProductsByOwner(business.ownerUid),
         fetchBusinessServicesByOwner(business.ownerUid),
+        fetchBusinessVerificationTierBySlug(slug),
+        fetchPublicTrustTimelineByBusinessSlug(slug, 12),
       ]);
       return {
         business,
@@ -142,6 +151,8 @@ export async function getCachedBusinessProfileBundle(slug: string) {
         ledger,
         products,
         services,
+        verificationTier,
+        trustTimeline,
       };
     },
     [`public-business-profile-${slug}`],

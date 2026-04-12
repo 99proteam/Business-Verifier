@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { OrderStatusPill } from "@/components/orders/order-status-pill";
 import { useAuth } from "@/components/providers/auth-provider";
 import { fetchOrdersByCustomer, OrderRecord } from "@/lib/firebase/repositories";
-import { OrderStatusPill } from "@/components/orders/order-status-pill";
 
 export function OrdersList() {
   const { user, hasFirebaseConfig } = useAuth();
@@ -66,8 +66,17 @@ export function OrdersList() {
             <OrderStatusPill status={row.status} />
           </div>
           <p className="mt-2 text-sm text-muted">
-            Amount INR {row.amount} • Business {row.businessOwnerName}
+            Amount INR {row.amount} | Business {row.businessOwnerName}
           </p>
+          {(row.discountAmountInr > 0 || row.shippingAmountInr > 0 || row.taxAmountInr > 0) && (
+            <p className="mt-1 text-xs text-muted">
+              Base {row.baseAmountInr} | Discount -{row.discountAmountInr} | Shipping{" "}
+              {row.shippingAmountInr} | Tax {row.taxAmountInr}
+            </p>
+          )}
+          {row.appliedCouponCode && (
+            <p className="mt-1 text-xs text-muted">Coupon {row.appliedCouponCode}</p>
+          )}
           <p className="mt-1 text-xs text-muted">
             Refund deadline {new Date(row.refundDeadlineAt).toLocaleString()}
           </p>

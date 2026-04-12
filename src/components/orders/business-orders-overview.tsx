@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { OrderStatusPill } from "@/components/orders/order-status-pill";
 import { useAuth } from "@/components/providers/auth-provider";
 import { fetchOrdersByBusinessOwner, OrderRecord } from "@/lib/firebase/repositories";
-import { OrderStatusPill } from "@/components/orders/order-status-pill";
 
 export function BusinessOrdersOverview() {
   const { user, hasFirebaseConfig } = useAuth();
@@ -92,12 +92,17 @@ export function BusinessOrdersOverview() {
               <h2 className="font-semibold">{row.productTitle}</h2>
               <OrderStatusPill status={row.status} />
             </div>
-            <p className="mt-1 text-sm text-muted">
-              Customer {row.customerEmail} • INR {row.amount}
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              Ordered {new Date(row.createdAt).toLocaleString()}
-            </p>
+            <p className="mt-1 text-sm text-muted">Customer {row.customerEmail} | INR {row.amount}</p>
+            {(row.discountAmountInr > 0 || row.shippingAmountInr > 0 || row.taxAmountInr > 0) && (
+              <p className="mt-1 text-xs text-muted">
+                Base {row.baseAmountInr} | Discount -{row.discountAmountInr} | Shipping{" "}
+                {row.shippingAmountInr} | Tax {row.taxAmountInr}
+              </p>
+            )}
+            {row.appliedCouponCode && (
+              <p className="mt-1 text-xs text-muted">Coupon {row.appliedCouponCode}</p>
+            )}
+            <p className="mt-1 text-xs text-muted">Ordered {new Date(row.createdAt).toLocaleString()}</p>
           </article>
         ))}
     </div>

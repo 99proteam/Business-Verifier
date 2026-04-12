@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect } from "react";
 import { BusinessTrustBadgeRecord } from "@/lib/firebase/repositories";
 
 function formatINR(value: number) {
@@ -10,9 +13,25 @@ function formatINR(value: number) {
 }
 
 export function TrustBadgeWidget({ row }: { row: BusinessTrustBadgeRecord | null }) {
+  useEffect(() => {
+    if (!row) return;
+    void fetch("/api/widgets/trust-badge/track", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        businessId: row.businessId,
+        eventType: "impression",
+      }),
+    }).catch(() => undefined);
+  }, [row]);
+
   if (!row) {
     return <div className="p-3 text-xs text-danger">Business trust profile unavailable.</div>;
   }
+
+  const clickHref = `/api/widgets/trust-badge/click?businessId=${encodeURIComponent(row.businessId)}&slug=${encodeURIComponent(row.businessSlug)}`;
 
   return (
     <div className="rounded-xl border border-border bg-surface p-3 text-foreground">
@@ -34,7 +53,9 @@ export function TrustBadgeWidget({ row }: { row: BusinessTrustBadgeRecord | null
         Locked deposit {formatINR(row.totalLockedDeposit)} | Available {formatINR(row.totalAvailableDeposit)}
       </p>
       <Link
-        href={`/business/${row.businessSlug}`}
+        href={clickHref}
+        target="_blank"
+        rel="noreferrer"
         className="mt-3 inline-flex rounded-lg bg-brand px-2 py-1 text-xs font-medium text-white transition hover:bg-brand-strong"
       >
         View full trust profile

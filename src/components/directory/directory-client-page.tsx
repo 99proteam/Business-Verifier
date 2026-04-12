@@ -1,7 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { Search } from "lucide-react";
+import {
+  BadgeCheck,
+  Building2,
+  Filter,
+  Globe,
+  MapPin,
+  Search,
+  ShieldCheck,
+  Star,
+  Ticket,
+  TrendingUp,
+  Users,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { PublicAdBanner } from "@/components/ads/public-ad-banner";
 import { SiteHeader } from "@/components/layout/site-header";
@@ -183,7 +195,6 @@ export function DirectoryClientPage({
       setError("Sign in with Gmail to follow businesses.");
       return;
     }
-
     setBusyId(row.id);
     setError(null);
     try {
@@ -219,205 +230,306 @@ export function DirectoryClientPage({
     }
   }
 
+  const getTrustColor = (score: number) => {
+    if (score >= 80) return "bg-emerald-100 text-emerald-700 border-emerald-200";
+    if (score >= 60) return "bg-amber-100 text-amber-700 border-amber-200";
+    return "bg-rose-100 text-rose-700 border-rose-200";
+  };
+
   return (
-    <div>
+    <div className="min-h-screen bg-background">
       <SiteHeader />
-      <main className="mx-auto w-full max-w-6xl px-4 pb-8 pt-10">
-        <section className="glass rounded-3xl p-6 md:p-8">
-          <h1 className="text-3xl font-semibold tracking-tight">Business Directory</h1>
-          <p className="mt-2 text-sm text-muted">
-            Search verified online and offline businesses, review trust signals, follow
-            businesses, and initiate support tickets when needed.
-          </p>
 
-          {!hasFirebaseConfig && (
-            <div className="mt-4 rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
-              Firebase config missing in `.env.local`.
+      {/* Page header */}
+      <div className="border-b border-border bg-white">
+        <div className="mx-auto w-full max-w-6xl px-4 py-8">
+          <div className="flex items-center gap-3 mb-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand/10 text-brand">
+              <Building2 size={20} />
+            </span>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">Business Directory</h1>
+              <p className="text-sm text-muted">
+                Discover and verify trusted businesses worldwide
+              </p>
             </div>
-          )}
-
-          {error && (
-            <div className="mt-4 rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
-              {error}
-            </div>
-          )}
-
-          <div className="mt-5 flex flex-wrap gap-3">
-            {(["online", "offline"] as const).map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setTab(type)}
-                className={`rounded-xl px-4 py-2 text-sm capitalize transition ${
-                  tab === type
-                    ? "bg-brand text-white"
-                    : "border border-border bg-surface text-foreground hover:border-brand/40"
-                }`}
-              >
-                {type}
-              </button>
-            ))}
           </div>
 
-          <div className="mt-4 flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2">
-            <Search size={16} className="text-muted" />
+          {/* Stats row */}
+          <div className="flex flex-wrap gap-4 mt-4">
+            {[
+              { icon: BadgeCheck, label: `${rows.length} verified businesses` },
+              { icon: Globe, label: `${countries.length} countries` },
+              { icon: ShieldCheck, label: "Manually verified" },
+            ].map((item) => {
+              const Icon = item.icon;
+              return (
+                <div key={item.label} className="flex items-center gap-1.5 text-xs text-muted">
+                  <Icon size={13} className="text-brand" />
+                  {item.label}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <main className="mx-auto w-full max-w-6xl px-4 py-8">
+
+        {/* Firebase error */}
+        {!hasFirebaseConfig && (
+          <div className="mb-6 rounded-xl border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">
+            Firebase config missing in <code className="font-mono">.env.local</code>.
+          </div>
+        )}
+
+        {error && (
+          <div className="mb-6 rounded-xl border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">
+            {error}
+          </div>
+        )}
+
+        {/* Filters bar */}
+        <div className="rounded-2xl border border-border bg-white p-5 shadow-sm mb-6">
+          {/* Tab switcher */}
+          <div className="flex items-center gap-2 mb-4">
+            <Filter size={15} className="text-muted" />
+            <span className="text-sm font-medium text-muted">Filter by type:</span>
+            <div className="flex items-center gap-1.5">
+              {(["online", "offline"] as const).map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setTab(type)}
+                  className={`rounded-lg px-3.5 py-1.5 text-sm font-medium capitalize transition ${
+                    tab === type
+                      ? "bg-brand text-white shadow-sm"
+                      : "border border-border text-muted hover:border-brand/40 hover:text-brand"
+                  }`}
+                >
+                  {type === "online" ? "🌐 Online" : "🏪 Offline"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Search input */}
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search by business key, name, city, or category..."
-              className="w-full bg-transparent text-sm outline-none"
+              placeholder="Search by business name, key, city, or category..."
+              className="w-full rounded-xl border border-border bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition focus:border-brand focus:bg-white focus:ring-2 focus:ring-brand/10"
             />
           </div>
+
+          {/* Search results dropdown */}
           {(searchLoading || searchHits.length > 0) && (
-            <div className="mt-2 rounded-xl border border-border bg-surface p-2">
+            <div className="mt-2 rounded-xl border border-border bg-white shadow-lg">
               {searchLoading && (
-                <p className="px-2 py-1 text-xs text-muted">Searching across modules...</p>
+                <p className="px-4 py-3 text-xs text-muted">Searching across all modules...</p>
               )}
-              {!searchLoading && !searchHits.length && (
-                <p className="px-2 py-1 text-xs text-muted">No cross-module matches found.</p>
-              )}
-              {!searchLoading &&
-                searchHits.map((hit) => (
-                  <Link
-                    key={`${hit.type}_${hit.id}`}
-                    href={hit.href}
-                    className="block rounded-lg px-2 py-2 text-sm transition hover:bg-brand/10"
-                  >
-                    <p className="font-medium capitalize">
-                      {hit.title} <span className="text-xs text-muted">({hit.type})</span>
-                    </p>
+              {!searchLoading && searchHits.map((hit) => (
+                <Link
+                  key={`${hit.type}_${hit.id}`}
+                  href={hit.href}
+                  className="flex items-start gap-3 px-4 py-3 text-sm transition hover:bg-brand/5 border-b border-border last:border-0"
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand/10 text-brand text-[10px] font-bold uppercase">
+                    {hit.type[0]}
+                  </span>
+                  <div>
+                    <p className="font-medium text-foreground">{hit.title}</p>
                     <p className="text-xs text-muted">{hit.subtitle}</p>
-                  </Link>
-                ))}
+                  </div>
+                </Link>
+              ))}
             </div>
           )}
 
+          {/* Country + city filters */}
           <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <select
-              value={countryFilter}
-              onChange={(event) => {
-                setCountryFilter(event.target.value);
-                setCityFilter("");
-              }}
-              className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-            >
-              <option value="">All countries</option>
-              {countries.map((country) => (
-                <option key={country} value={country}>
-                  {country}
-                </option>
-              ))}
-            </select>
-            <select
-              value={cityFilter}
-              onChange={(event) => setCityFilter(event.target.value)}
-              className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
-            >
-              <option value="">All cities</option>
-              {cityOptions.map((city) => (
-                <option key={city} value={city}>
-                  {city}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="mt-4">
-            <PublicAdBanner placement="directory_banner" city={cityFilter || countryFilter} />
-          </div>
-
-          {loading && (
-            <div className="mt-6 rounded-2xl border border-border bg-surface p-4 text-sm text-muted">
-              Loading business directory...
+            <div className="relative">
+              <Globe size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+              <select
+                value={countryFilter}
+                onChange={(event) => {
+                  setCountryFilter(event.target.value);
+                  setCityFilter("");
+                }}
+                className="w-full rounded-xl border border-border bg-white py-2.5 pl-9 pr-4 text-sm outline-none transition focus:border-brand appearance-none"
+              >
+                <option value="">All Countries</option>
+                {countries.map((country) => (
+                  <option key={country} value={country}>{country}</option>
+                ))}
+              </select>
             </div>
-          )}
+            <div className="relative">
+              <MapPin size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+              <select
+                value={cityFilter}
+                onChange={(event) => setCityFilter(event.target.value)}
+                className="w-full rounded-xl border border-border bg-white py-2.5 pl-9 pr-4 text-sm outline-none transition focus:border-brand appearance-none"
+              >
+                <option value="">All Cities</option>
+                {cityOptions.map((city) => (
+                  <option key={city} value={city}>{city}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
 
-          {!loading && (
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              {!filteredRows.length && (
-                <article className="rounded-2xl border border-border bg-surface p-4 text-sm text-muted md:col-span-2">
-                  No businesses found for your filters yet.
-                </article>
-              )}
+        {/* Ad banner */}
+        <div className="mb-6">
+          <PublicAdBanner placement="directory_banner" city={cityFilter || countryFilter} />
+        </div>
 
-              {filteredRows.map((business) => {
-                const followed = followedIds.includes(business.id);
-                return (
-                  <article key={business.id} className="rounded-2xl border border-border bg-surface p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <h2 className="font-semibold">{business.businessName}</h2>
-                      <span className="rounded-full bg-brand/15 px-2 py-1 text-xs text-brand-strong">
-                        Trust {business.trustScore}
+        {/* Results header */}
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-sm text-muted">
+            {loading ? "Loading..." : `${filteredRows.length} businesses found`}
+          </p>
+        </div>
+
+        {/* Loading state */}
+        {loading && (
+          <div className="grid gap-4 md:grid-cols-2">
+            {[1, 2, 3, 4].map((n) => (
+              <div key={n} className="rounded-2xl border border-border bg-white p-5 space-y-3">
+                <div className="h-5 w-2/3 rounded-lg shimmer" />
+                <div className="h-4 w-1/2 rounded-lg shimmer" />
+                <div className="h-4 w-3/4 rounded-lg shimmer" />
+                <div className="flex gap-2 mt-2">
+                  <div className="h-9 w-24 rounded-xl shimmer" />
+                  <div className="h-9 w-28 rounded-xl shimmer" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!loading && (
+          <div className="grid gap-4 md:grid-cols-2">
+            {!filteredRows.length && (
+              <div className="md:col-span-2 rounded-2xl border border-border bg-white p-10 text-center">
+                <Building2 size={32} className="mx-auto text-muted mb-3" />
+                <p className="font-medium text-foreground">No businesses found</p>
+                <p className="text-sm text-muted mt-1">Try adjusting your filters or search query</p>
+              </div>
+            )}
+
+            {filteredRows.map((business) => {
+              const followed = followedIds.includes(business.id);
+              const trustScore = business.trustScore ?? 0;
+              return (
+                <article
+                  key={business.id}
+                  className="rounded-2xl border border-border bg-white p-5 shadow-sm transition hover:shadow-md hover:border-brand/20 card-hover"
+                >
+                  {/* Header */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand/8 text-brand font-bold text-sm">
+                        {business.businessName[0]?.toUpperCase() ?? "B"}
+                      </div>
+                      <div className="min-w-0">
+                        <h2 className="font-semibold text-foreground truncate">{business.businessName}</h2>
+                        <p className="text-xs text-muted mt-0.5">#{business.publicBusinessKey}</p>
+                      </div>
+                    </div>
+                    <span className={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${getTrustColor(trustScore)}`}>
+                      <TrendingUp size={11} />
+                      {trustScore}
+                    </span>
+                  </div>
+
+                  {/* Details */}
+                  <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5">
+                    <div className="flex items-center gap-1.5 text-xs text-muted">
+                      <MapPin size={11} className="shrink-0" />
+                      {business.city}, {business.country}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-muted">
+                      <Star size={11} className="shrink-0" />
+                      {business.category}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-muted">
+                      <Globe size={11} className="shrink-0" />
+                      {business.mode} • {business.yearsInField}y exp.
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-muted">
+                      <Users size={11} className="shrink-0" />
+                      {business.followersCount} followers
+                    </div>
+                  </div>
+
+                  {/* Certificate & deposit */}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {business.certificateSerial ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 border border-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                        <BadgeCheck size={12} />
+                        Cert: {business.certificateSerial}
                       </span>
-                    </div>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 border border-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                        Pending Verification
+                      </span>
+                    )}
+                    {(business.totalLockedDeposit ?? 0) > 0 && (
+                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-blue-50 border border-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700">
+                        <ShieldCheck size={12} />
+                        Deposit ₹{business.totalLockedDeposit}
+                      </span>
+                    )}
+                  </div>
 
-                    <p className="mt-2 text-sm text-muted">
-                      {business.city}, {business.country} | {business.category}
-                    </p>
-                    <p className="mt-1 text-xs text-muted">
-                      {business.mode} | {business.yearsInField} years | Followers{" "}
-                      {business.followersCount}
-                    </p>
-                    <p className="mt-1 text-xs text-muted">
-                      Business key {business.publicBusinessKey}
-                    </p>
-                    <p className="mt-1 text-xs text-muted">
-                      Locked deposit INR {business.totalLockedDeposit ?? 0} | Available INR{" "}
-                      {business.totalAvailableDeposit ?? 0}
-                    </p>
-                    <p className="mt-1 text-xs text-muted">
-                      {business.certificateSerial
-                        ? `Certificate ${business.certificateSerial}`
-                        : "Certificate available after admin approval"}
-                    </p>
+                  {/* Action buttons */}
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void onToggleFollow(business)}
+                      disabled={busyId === business.id}
+                      className={`rounded-xl px-3 py-2 text-xs font-medium transition disabled:opacity-60 ${
+                        followed
+                          ? "bg-brand/10 border border-brand/30 text-brand-strong hover:bg-brand/15"
+                          : "border border-border text-muted hover:border-brand/40 hover:text-brand"
+                      }`}
+                    >
+                      <Users size={12} className="inline mr-1" />
+                      {busyId === business.id ? "..." : followed ? "Following" : "Follow"}
+                    </button>
 
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void onToggleFollow(business)}
-                        disabled={busyId === business.id}
-                        className={`rounded-xl px-3 py-2 text-sm transition disabled:opacity-70 ${
-                          followed
-                            ? "border border-brand/50 bg-brand/10 text-brand-strong hover:bg-brand/15"
-                            : "border border-border hover:border-brand/40"
-                        }`}
-                      >
-                        {busyId === business.id
-                          ? "Updating..."
-                          : followed
-                            ? "Following"
-                            : "Follow business"}
-                      </button>
+                    <Link
+                      href={`/business/${business.slug}`}
+                      className="rounded-xl bg-brand px-3 py-2 text-xs font-semibold text-white transition hover:bg-brand-strong"
+                    >
+                      <ShieldCheck size={12} className="inline mr-1" />
+                      Trust Profile
+                    </Link>
 
-                      <Link
-                        href={`/business/${business.slug}`}
-                        className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
-                      >
-                        View trust profile
-                      </Link>
+                    <Link
+                      href={`/business/${business.slug}#questions`}
+                      className="rounded-xl border border-border px-3 py-2 text-xs font-medium text-muted transition hover:border-brand/40 hover:text-brand"
+                    >
+                      Q&A
+                    </Link>
 
-                      <Link
-                        href={`/business/${business.slug}#questions`}
-                        className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
-                      >
-                        Questions
-                      </Link>
-
-                      <Link
-                        href={`/dashboard/tickets/new?business=${encodeURIComponent(
-                          business.businessName,
-                        )}`}
-                        className="rounded-xl border border-border px-3 py-2 text-sm transition hover:border-brand/40"
-                      >
-                        Raise ticket
-                      </Link>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </section>
+                    <Link
+                      href={`/dashboard/tickets/new?business=${encodeURIComponent(business.businessName)}`}
+                      className="rounded-xl border border-border px-3 py-2 text-xs font-medium text-muted transition hover:border-amber-300 hover:text-amber-700"
+                    >
+                      <Ticket size={12} className="inline mr-1" />
+                      Raise Ticket
+                    </Link>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </main>
     </div>
   );

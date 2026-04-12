@@ -4,22 +4,24 @@ import { SignInPanel } from "./sign-in-panel";
 
 function SignInLoadingFallback() {
   return (
-    <div className="glass mx-auto w-full max-w-md rounded-3xl p-7">
-      <h1 className="text-2xl font-semibold tracking-tight">Loading sign-in</h1>
-      <p className="mt-2 text-sm text-muted">Preparing secure Gmail login panel...</p>
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <div className="rounded-2xl border border-border bg-white p-8 shadow-md w-full max-w-md">
+        <div className="h-6 w-40 rounded-lg bg-slate-100 shimmer mb-4" />
+        <div className="h-4 w-full rounded-lg bg-slate-100 shimmer mb-2" />
+        <div className="h-4 w-3/4 rounded-lg bg-slate-100 shimmer mb-6" />
+        <div className="h-12 w-full rounded-xl bg-slate-100 shimmer" />
+      </div>
     </div>
   );
 }
 
 export default function SignInPage() {
   return (
-    <div>
+    <div className="min-h-screen bg-background">
       <SiteHeader />
-      <main className="mx-auto flex min-h-[70vh] w-full max-w-6xl items-center px-4 py-8">
-        <Suspense fallback={<SignInLoadingFallback />}>
-          <SignInPanel />
-        </Suspense>
-      </main>
+      <Suspense fallback={<SignInLoadingFallback />}>
+        <SignInPanel />
+      </Suspense>
     </div>
   );
 }

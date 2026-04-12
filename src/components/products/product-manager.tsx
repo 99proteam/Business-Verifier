@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useAuth } from "@/components/providers/auth-provider";
@@ -41,6 +41,84 @@ type ProductFormOutput = z.output<typeof schema>;
 const fieldClass =
   "w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none transition focus:border-brand focus:ring-4 focus:ring-brand/15";
 
+type CsvImportType = "product" | "service";
+
+function parseCsvLine(line: string) {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (inQuotes && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function normalizeCsvHeader(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function parseCsvRows(text: string) {
+  const lines = text
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2) {
+    throw new Error("CSV must include header row and at least one data row.");
+  }
+  const headers = parseCsvLine(lines[0]).map(normalizeCsvHeader);
+  if (!headers.length) {
+    throw new Error("CSV header row is missing.");
+  }
+  return lines.slice(1).map((line, rowIndex) => {
+    const values = parseCsvLine(line);
+    const row: Record<string, string> = { _rowNumber: String(rowIndex + 2) };
+    headers.forEach((header, columnIndex) => {
+      row[header] = values[columnIndex]?.trim() ?? "";
+    });
+    return row;
+  });
+}
+
+function parseBooleanLike(value: string) {
+  return /^(1|true|yes|y)$/i.test(value.trim());
+}
+
+function toOptionalStock(value: string) {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return Math.round(parsed);
+}
+
+function forceDownloadCsv(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function ProductManager() {
   const { user, hasFirebaseConfig } = useAuth();
   const [rows, setRows] = useState<DigitalProductRecord[]>([]);
@@ -56,10 +134,12 @@ export function ProductManager() {
   const [planName, setPlanName] = useState("");
   const [planCycle, setPlanCycle] = useState<DigitalProductPricingCycle>("one_time");
   const [planPrice, setPlanPrice] = useState("0");
+  const [productStockAvailable, setProductStockAvailable] = useState("");
   const [serviceTitle, setServiceTitle] = useState("");
   const [serviceCategory, setServiceCategory] = useState("");
   const [serviceDescription, setServiceDescription] = useState("");
   const [servicePrice, setServicePrice] = useState("0");
+  const [serviceStockAvailable, setServiceStockAvailable] = useState("");
   const [serviceCurrency, setServiceCurrency] = useState<"INR" | "USD">("INR");
   const [serviceMode, setServiceMode] = useState<BusinessServiceMode>("online");
   const [serviceDeliveryMode, setServiceDeliveryMode] =
@@ -77,6 +157,10 @@ export function ProductManager() {
   const [wooKey, setWooKey] = useState("");
   const [wooSecret, setWooSecret] = useState("");
   const [integrationBusy, setIntegrationBusy] = useState(false);
+  const [importType, setImportType] = useState<CsvImportType>("product");
+  const [importFileName, setImportFileName] = useState("");
+  const [importRows, setImportRows] = useState<Array<Record<string, string>>>([]);
+  const [importBusy, setImportBusy] = useState(false);
 
   const {
     register,
@@ -155,6 +239,7 @@ export function ProductManager() {
         price: value.price,
         noRefund: value.noRefund,
         category: value.category,
+        stockAvailable: toOptionalStock(productStockAvailable),
         pricingPlans: pricingPlans.length ? pricingPlans : undefined,
       });
       setInfo("Digital product created.");
@@ -163,6 +248,7 @@ export function ProductManager() {
       setPlanName("");
       setPlanCycle("one_time");
       setPlanPrice("0");
+      setProductStockAvailable("");
       await loadProducts();
     } catch (submitError) {
       setError(
@@ -206,12 +292,14 @@ export function ProductManager() {
         currency: serviceCurrency,
         serviceMode,
         deliveryMode: serviceDeliveryMode,
+        stockAvailable: toOptionalStock(serviceStockAvailable),
       });
       setInfo("Business service listed.");
       setServiceTitle("");
       setServiceCategory("");
       setServiceDescription("");
       setServicePrice("0");
+      setServiceStockAvailable("");
       setServiceCurrency("INR");
       setServiceMode("online");
       setServiceDeliveryMode("remote");
@@ -408,6 +496,150 @@ export function ProductManager() {
     }
   }
 
+  function downloadTemplate(kind: CsvImportType) {
+    if (kind === "product") {
+      forceDownloadCsv(
+        "demo-products-template.csv",
+        [
+          "title,category,description,price,noRefund,stockAvailable",
+          '"Starter Audit","Marketing","Detailed audit report with recommendations.",999,false,40',
+          '"Pro Automation Toolkit","Automation","Toolkit with templates and setup guide.",2499,true,12',
+        ].join("\n"),
+      );
+      return;
+    }
+    forceDownloadCsv(
+      "demo-services-template.csv",
+      [
+        "title,category,description,startingPrice,currency,serviceMode,deliveryMode,stockAvailable",
+        '"Website Security Review","Security","Complete security review and fix checklist.",3499,INR,online,remote,20',
+        '"Store Setup Visit","Consulting","In-person setup and team onboarding service.",149,USD,offline,onsite,5',
+      ].join("\n"),
+    );
+  }
+
+  async function onImportFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    setInfo(null);
+    try {
+      const text = await file.text();
+      const parsedRows = parseCsvRows(text);
+      setImportRows(parsedRows);
+      setImportFileName(file.name);
+      setInfo(`Parsed ${parsedRows.length} row(s) from ${file.name}.`);
+    } catch (parseError) {
+      setImportRows([]);
+      setImportFileName(file.name);
+      setError(parseError instanceof Error ? parseError.message : "Unable to parse CSV file.");
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  async function runBulkImport() {
+    if (!user) {
+      setError("Please sign in first.");
+      return;
+    }
+    if (!hasFirebaseConfig) {
+      setError("Firebase config missing. Add NEXT_PUBLIC_FIREBASE_* values.");
+      return;
+    }
+    if (!importRows.length) {
+      setError("Upload and parse a CSV file before importing.");
+      return;
+    }
+
+    setImportBusy(true);
+    setError(null);
+    setInfo(null);
+    let created = 0;
+    let failed = 0;
+    const failedRows: string[] = [];
+
+    try {
+      for (const row of importRows) {
+        try {
+          const title = String(row.title ?? "").trim();
+          const category = String(row.category ?? "").trim();
+          const description = String(row.description ?? "").trim();
+          const stock = toOptionalStock(String(row.stockavailable ?? row.stock ?? ""));
+          if (!title || !category || description.length < 12) {
+            throw new Error("Missing required title/category/description.");
+          }
+
+          if (importType === "product") {
+            const price = Number(row.price ?? 0);
+            if (!Number.isFinite(price) || price <= 0) {
+              throw new Error("Invalid price.");
+            }
+            await createDigitalProduct({
+              ownerUid: user.uid,
+              ownerName: user.displayName ?? "Business",
+              title,
+              category,
+              description,
+              price,
+              noRefund: parseBooleanLike(String(row.norefund ?? row.refundblocked ?? "")),
+              stockAvailable: stock,
+            });
+          } else {
+            const startingPrice = Number(row.startingprice ?? row.price ?? 0);
+            if (!Number.isFinite(startingPrice) || startingPrice <= 0) {
+              throw new Error("Invalid starting price.");
+            }
+            const currencyValue = String(row.currency ?? "INR").trim().toUpperCase();
+            const currency: "INR" | "USD" = currencyValue === "USD" ? "USD" : "INR";
+            const serviceModeValue = String(row.servicemode ?? "online").trim().toLowerCase();
+            const serviceMode: BusinessServiceMode =
+              serviceModeValue === "offline" || serviceModeValue === "hybrid"
+                ? serviceModeValue
+                : "online";
+            const deliveryModeValue = String(row.deliverymode ?? "remote").trim().toLowerCase();
+            const deliveryMode: BusinessServiceDeliveryMode =
+              deliveryModeValue === "onsite" || deliveryModeValue === "both"
+                ? deliveryModeValue
+                : "remote";
+            await createBusinessService({
+              ownerUid: user.uid,
+              ownerName: user.displayName ?? "Business",
+              title,
+              category,
+              description,
+              startingPrice,
+              currency,
+              serviceMode,
+              deliveryMode,
+              stockAvailable: stock,
+            });
+          }
+          created += 1;
+        } catch (rowError) {
+          failed += 1;
+          const rowNumber = Number(row._rowNumber ?? 0) || 0;
+          const reason = rowError instanceof Error ? rowError.message : "Unknown error";
+          failedRows.push(`row ${rowNumber || "?"}: ${reason}`);
+        }
+      }
+
+      if (created > 0) {
+        await loadProducts();
+      }
+      setInfo(
+        `Bulk import completed. Created ${created} ${importType}(s). Failed ${failed}.`,
+      );
+      if (failedRows.length) {
+        setError(failedRows.slice(0, 6).join(" | "));
+      } else {
+        setError(null);
+      }
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="glass rounded-3xl p-6">
@@ -421,10 +653,16 @@ export function ProductManager() {
         >
           View sales and refunds
         </Link>
+        <Link
+          href="#shop-builder"
+          className="ml-2 mt-3 inline-flex rounded-xl border border-border px-3 py-2 text-xs transition hover:border-brand/40"
+        >
+          Open shop website builder
+        </Link>
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="glass rounded-3xl p-6">
-        <h2 className="text-lg font-semibold tracking-tight">Create product</h2>
+        <h2 className="text-lg font-semibold tracking-tight">Create product manually</h2>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <label className="space-y-1">
             <span className="text-sm">Title</span>
@@ -442,6 +680,16 @@ export function ProductManager() {
             <span className="text-sm">Price (INR)</span>
             <input type="number" className={fieldClass} {...register("price")} />
             {errors.price && <p className="text-xs text-danger">{errors.price.message}</p>}
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Stock (optional)</span>
+            <input
+              type="number"
+              value={productStockAvailable}
+              onChange={(event) => setProductStockAvailable(event.target.value)}
+              className={fieldClass}
+              placeholder="Example: 50"
+            />
           </label>
           <label className="flex items-center gap-2 text-sm md:pt-8">
             <input type="checkbox" {...register("noRefund")} />
@@ -526,7 +774,7 @@ export function ProductManager() {
       </form>
 
       <form onSubmit={onCreateService} className="glass rounded-3xl p-6">
-        <h2 className="text-lg font-semibold tracking-tight">Create service</h2>
+        <h2 className="text-lg font-semibold tracking-tight">Create service manually</h2>
         <p className="mt-1 text-xs text-muted">
           Publish offline/online services on your verified business profile.
         </p>
@@ -554,6 +802,16 @@ export function ProductManager() {
               value={servicePrice}
               onChange={(event) => setServicePrice(event.target.value)}
               className={fieldClass}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Stock (optional)</span>
+            <input
+              type="number"
+              value={serviceStockAvailable}
+              onChange={(event) => setServiceStockAvailable(event.target.value)}
+              className={fieldClass}
+              placeholder="Example: 15"
             />
           </label>
           <label className="space-y-1">
@@ -611,6 +869,64 @@ export function ProductManager() {
           {serviceSubmitting ? "Saving..." : "Create service"}
         </button>
       </form>
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Bulk import by Excel/CSV</h2>
+        <p className="mt-1 text-xs text-muted">
+          Add products or services in bulk using a CSV file (Excel supported). Download a demo template first.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-sm">Import type</span>
+            <select
+              value={importType}
+              onChange={(event) => setImportType(event.target.value as CsvImportType)}
+              className={fieldClass}
+            >
+              <option value="product">Products</option>
+              <option value="service">Services</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Upload CSV</span>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(event) => void onImportFileChange(event)}
+              className={fieldClass}
+            />
+          </label>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => downloadTemplate("product")}
+            className="rounded-xl border border-border px-3 py-2 text-xs transition hover:border-brand/40"
+          >
+            Download demo product sheet
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadTemplate("service")}
+            className="rounded-xl border border-border px-3 py-2 text-xs transition hover:border-brand/40"
+          >
+            Download demo service sheet
+          </button>
+          <button
+            type="button"
+            onClick={() => void runBulkImport()}
+            disabled={importBusy || !importRows.length}
+            className="rounded-xl bg-brand px-3 py-2 text-xs font-medium text-white transition hover:bg-brand-strong disabled:opacity-70"
+          >
+            {importBusy ? "Importing..." : "Run bulk import"}
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          {importFileName
+            ? `${importFileName} parsed with ${importRows.length} row(s).`
+            : "No file parsed yet."}
+        </p>
+      </section>
 
       <section className="glass rounded-3xl p-6">
         <h2 className="text-lg font-semibold tracking-tight">

@@ -22,16 +22,19 @@ export const PROFILE_LINKS = [
   { href: "/dashboard/security", label: "Security" },
   { href: "/dashboard/business/onboarding", label: "Business Onboarding" },
   { href: "/dashboard/business/products", label: "Business Offerings" },
+  { href: "/dashboard/business/widgets", label: "Business Widgets" },
   { href: "/dashboard/business/orders", label: "Business Orders" },
   { href: "/dashboard/business/groups", label: "Business Groups" },
   { href: "/dashboard/business/notifications", label: "Business Notifications" },
   { href: "/dashboard/business/ads", label: "Business Ads" },
   { href: "/dashboard/business/membership", label: "Business Membership" },
+  { href: "/dashboard/business/growth", label: "Business Growth Suite" },
   { href: "/dashboard/admin/verification", label: "Admin Verification" },
   { href: "/dashboard/admin/ads", label: "Admin Ads" },
   { href: "/dashboard/admin/tickets", label: "Admin Tickets" },
   { href: "/dashboard/admin/orders", label: "Admin Orders" },
   { href: "/dashboard/admin/wallet", label: "Admin Wallet" },
+  { href: "/dashboard/admin/risk", label: "Admin Risk Operations" },
   { href: "/dashboard", label: "Dashboard" },
 ];
 
@@ -64,7 +67,10 @@ export const BUSINESS_OWNER_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/business/onboarding", label: "Business Onboarding" },
   { href: "/dashboard/business/products", label: "Products and Services" },
+  { href: "/dashboard/business/products#shop-builder", label: "Shop Builder" },
+  { href: "/dashboard/business/products#commerce-engine", label: "Commerce Engine" },
   { href: "/dashboard/business/orders", label: "Business Orders" },
+  { href: "/dashboard/business/widgets", label: "Widget Manager" },
   { href: "/dashboard/business/reviews", label: "Business Reviews" },
   { href: "/dashboard/business/employees", label: "Employees" },
   { href: "/dashboard/business/groups", label: "Business Groups" },
@@ -72,12 +78,14 @@ export const BUSINESS_OWNER_LINKS = [
   { href: "/dashboard/business/ads", label: "Business Ads" },
   { href: "/dashboard/business/billing", label: "Business Billing" },
   { href: "/dashboard/business/membership", label: "Business Membership" },
+  { href: "/dashboard/business/growth", label: "Growth Suite" },
   { href: "/dashboard/business/deposit", label: "Pro Deposit" },
   { href: "/dashboard/wallet", label: "Wallet" },
   { href: "/dashboard/tickets", label: "Tickets" },
 ];
 
 export const ADMIN_LINKS = [
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/admin/verification", label: "Admin Verification" },
   { href: "/dashboard/admin/tickets", label: "Admin Tickets" },
   { href: "/dashboard/admin/orders", label: "Admin Orders" },
@@ -91,6 +99,7 @@ export const ADMIN_LINKS = [
   { href: "/dashboard/admin/reconciliation", label: "Admin Reconciliation" },
   { href: "/dashboard/admin/automation", label: "Admin Automation" },
   { href: "/dashboard/admin/audit", label: "Admin Audit" },
+  { href: "/dashboard/admin/risk", label: "Admin Risk Operations" },
 ];
 
 export function resolveRoleNavigation(role: string, isAdmin: boolean) {
@@ -99,11 +108,15 @@ export function resolveRoleNavigation(role: string, isAdmin: boolean) {
   const dedupe = (rows: Array<{ href: string; label: string }>) =>
     Array.from(new Map(rows.map((row) => [row.href, row])).values());
   if (isAdmin) {
-    return dedupe([...ADMIN_LINKS, ...BUSINESS_OWNER_LINKS, ...CUSTOMER_LINKS]);
+    return dedupe([...ADMIN_LINKS, { href: "/dashboard/security", label: "Security" }]);
   }
-  if (normalizedRole === "business_owner") return BUSINESS_OWNER_LINKS;
-  if (normalizedRole === "employee") return EMPLOYEE_LINKS;
-  return CUSTOMER_LINKS;
+  if (normalizedRole === "business_owner") {
+    return dedupe(BUSINESS_OWNER_LINKS);
+  }
+  if (normalizedRole === "employee") {
+    return dedupe(EMPLOYEE_LINKS);
+  }
+  return dedupe(CUSTOMER_LINKS);
 }
 
 export const MEMBERSHIP_PLANS: MembershipPlan[] = [

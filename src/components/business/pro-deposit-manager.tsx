@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
@@ -187,13 +188,16 @@ export function ProDepositManager() {
 
       {badge?.trustBadgeCode && (
         <section className="glass rounded-3xl p-6">
-          <h2 className="text-lg font-semibold tracking-tight">Trust badge widget code</h2>
-          <textarea
-            value={badge.trustBadgeCode}
-            readOnly
-            rows={4}
-            className="mt-3 w-full rounded-xl border border-border bg-surface px-3 py-2 text-xs outline-none"
-          />
+          <h2 className="text-lg font-semibold tracking-tight">Manage trust badge widget</h2>
+          <p className="mt-1 text-xs text-muted">
+            Use the Widget Manager to copy embed code and monitor impressions/clicks.
+          </p>
+          <Link
+            href="/dashboard/business/widgets"
+            className="mt-3 inline-flex rounded-xl border border-border px-3 py-2 text-xs transition hover:border-brand/40"
+          >
+            Open Widget Manager
+          </Link>
         </section>
       )}
 

@@ -35,7 +35,15 @@ export function ExternalProductsGrid({ initialRows }: { initialRows: ExternalPro
         }
       } catch (loadError) {
         if (mounted) {
-          setError(loadError instanceof Error ? loadError.message : "Unable to load external products.");
+          const message =
+            loadError instanceof Error
+              ? loadError.message
+              : "Unable to load external products.";
+          setError(
+            message.toLowerCase().includes("missing or insufficient permissions")
+              ? "External feed API is blocked by Firestore rules (rate-limit collection access). Deploy latest `firestore.rules`."
+              : message,
+          );
         }
       } finally {
         if (mounted) setLoading(false);

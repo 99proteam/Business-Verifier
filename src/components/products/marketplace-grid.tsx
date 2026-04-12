@@ -31,10 +31,14 @@ export function MarketplaceGrid({ initialRows }: { initialRows: DigitalProductRe
       const products = await fetchPublicDigitalProducts();
       setRows(products);
     } catch (loadError) {
-      setError(
+      const message =
         loadError instanceof Error
           ? loadError.message
-          : "Unable to load digital marketplace.",
+          : "Unable to load digital marketplace.";
+      setError(
+        message.toLowerCase().includes("missing or insufficient permissions")
+          ? "Marketplace data access is blocked by Firestore rules. Deploy latest `firestore.rules` and ensure public read for listings."
+          : message,
       );
     } finally {
       setLoading(false);

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Sora, Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import { PasswordSetupPrompt } from "@/components/auth/password-setup-prompt";
 import { AuthProvider } from "@/components/providers/auth-provider";
 
 const sora = Sora({
@@ -30,7 +31,10 @@ export default function RootLayout({
       className={`${sora.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          {children}
+          <PasswordSetupPrompt />
+        </AuthProvider>
       </body>
     </html>
   );

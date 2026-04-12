@@ -12,10 +12,11 @@ function getAdminEmails() {
 }
 
 export function RequireAdmin({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, isAdmin } = useAuth();
   const adminEmails = useMemo(() => getAdminEmails(), []);
   const currentEmail = user?.email?.toLowerCase() ?? "";
-  const isAdmin = adminEmails.includes(currentEmail);
+  const hasEmailAllowlistAccess = adminEmails.includes(currentEmail);
+  const canAccessAdmin = isAdmin || hasEmailAllowlistAccess;
 
   if (isLoading) {
     return (
@@ -27,11 +28,11 @@ export function RequireAdmin({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isAdmin) {
+  if (!canAccessAdmin) {
     return (
       <div className="mx-auto max-w-3xl rounded-2xl border border-danger/40 bg-danger/10 p-5 text-sm text-danger">
-        Access denied. This module is only for admin accounts listed in
-        `NEXT_PUBLIC_ADMIN_EMAILS`.
+        Access denied. This module is only for active admins (Firestore `admins/{'{uid}'}`)
+        or emails listed in `NEXT_PUBLIC_ADMIN_EMAILS`.
       </div>
     );
   }

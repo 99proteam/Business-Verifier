@@ -325,6 +325,135 @@ service cloud.firestore {
       allow write: if isAdmin() || ownsRecord();
     }
 
+    match /orders/{orderId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /escrowEntries/{entryId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /invoices/{invoiceId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /proDepositLedgers/{ledgerId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /partnershipFeeLedgers/{ledgerId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /membershipPurchases/{purchaseId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /membershipTransactions/{txId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /membershipBusinessReports/{reportId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /membershipDistributionCycles/{cycleId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /membershipDiscountChecks/{checkId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /productOfferBroadcastLogs/{logId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /verifierCustomerMemberships/{membershipId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /businessVerificationTiers/{businessId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() || ownsRecord();
+    }
+
+    match /trustTimelineEvents/{eventId} {
+      allow read: if (resource.data.visibility == "public") || isAdmin() || ownsRecord();
+      allow create, update, delete: if isAdmin() || ownsRecord();
+    }
+
+    match /disputeSlaBreaches/{breachId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /ticketEvidenceAssessments/{assessmentId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /merchantRiskProfiles/{profileId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /integrationApiKeys/{keyId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /widgetConversionSnapshots/{snapshotId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /crmLeads/{leadId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /crmSegments/{segmentId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /crmCampaigns/{campaignId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /referralPrograms/{programId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /referralInvites/{inviteId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /complianceProfiles/{profileId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /complianceDocuments/{documentId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /businessShopCoupons/{couponId} {
+      allow read: if (resource.data.active == true) || isAdmin() || ownsRecord();
+      allow create, update, delete: if isAdmin() || ownsRecord();
+    }
+
+    match /businessShopTaxRules/{ruleId} {
+      allow read: if (resource.data.active == true) || isAdmin() || ownsRecord();
+      allow create, update, delete: if isAdmin() || ownsRecord();
+    }
+
+    match /businessShopShippingZones/{zoneId} {
+      allow read: if (resource.data.active == true) || isAdmin() || ownsRecord();
+      allow create, update, delete: if isAdmin() || ownsRecord();
+    }
+
+    match /shopInventoryLogs/{logId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
+    match /abandonedCheckouts/{checkoutId} {
+      allow read, write: if isAdmin() || ownsRecord();
+    }
+
     match /businessServices/{serviceId} {
       allow read: if true;
       allow write: if isAdmin() || ownsRecord();
@@ -384,9 +513,34 @@ service cloud.firestore {
       allow read, write: if isAdmin() || ownsRecord();
     }
 
-    match /{document=**} {
-      allow read: if isAdmin() || ownsRecord();
+    match /businessShops/{shopId} {
+      allow read: if true;
       allow write: if isAdmin() || ownsRecord();
+    }
+
+    match /apiRateLimits/{rateLimitId} {
+      allow read, create, update: if true;
+      allow delete: if isAdmin();
+    }
+
+    match /apiAbuseSignals/{signalId} {
+      allow read: if isAdmin();
+      allow create, update: if true;
+      allow delete: if isAdmin();
+    }
+
+    match /trustBadgeWidgetDailyStats/{statId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.ownerUid is string &&
+        resource.data.ownerUid == request.auth.uid
+      );
+      allow create, update: if true;
+      allow delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if isAdmin();
     }
   }
 }

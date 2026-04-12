@@ -13,6 +13,7 @@ import {
   limit,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -80,6 +81,15 @@ function getDb() {
     throw new Error("Firebase is not configured. Add NEXT_PUBLIC_FIREBASE_* values.");
   }
   return db;
+}
+
+function isFirestorePermissionError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("permission_denied") ||
+    message.includes("missing or insufficient permissions")
+  );
 }
 
 function userLookupRef(database: ReturnType<typeof getDb>, uid: string) {
@@ -360,6 +370,31 @@ export interface BusinessTrustBadgeRecord {
   profileUrl: string;
 }
 
+export type TrustBadgeWidgetEventType = "impression" | "click";
+
+export interface TrustBadgeWidgetDailyStatRecord {
+  id: string;
+  businessId: string;
+  ownerUid: string;
+  businessName: string;
+  dateKey: string;
+  impressions: number;
+  clicks: number;
+  lastEventAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export interface TrustBadgeWidgetSummaryRecord {
+  businessId: string;
+  businessName: string;
+  totalImpressions: number;
+  totalClicks: number;
+  ctrPercent: number;
+  lastEventAt?: string;
+  daily: TrustBadgeWidgetDailyStatRecord[];
+}
+
 export interface AuditEventRecord {
   id: string;
   actorUid: string;
@@ -475,6 +510,8 @@ export interface SupportTicketInput {
   customerUid: string;
   customerName: string;
   customerEmail: string;
+  businessId?: string;
+  businessSlug?: string;
   businessName: string;
   orderReference?: string;
   title: string;
@@ -529,6 +566,8 @@ function mapTicketRecord(snapshotId: string, data: Record<string, unknown>) {
     customerUid: String(data.customerUid ?? ""),
     customerName: String(data.customerName ?? "Customer"),
     customerEmail: String(data.customerEmail ?? ""),
+    businessId: data.businessId ? String(data.businessId) : undefined,
+    businessSlug: data.businessSlug ? String(data.businessSlug) : undefined,
     businessName: String(data.businessName ?? ""),
     orderReference: data.orderReference ? String(data.orderReference) : undefined,
     title: String(data.title ?? ""),
@@ -678,15 +717,60 @@ function mapProDepositLedger(
   };
 }
 
+function mapTrustBadgeWidgetDailyStat(
+  snapshotId: string,
+  data: Record<string, unknown>,
+): TrustBadgeWidgetDailyStatRecord {
+  return {
+    id: snapshotId,
+    businessId: String(data.businessId ?? ""),
+    ownerUid: String(data.ownerUid ?? ""),
+    businessName: String(data.businessName ?? ""),
+    dateKey: String(data.dateKey ?? ""),
+    impressions: Number(data.impressions ?? 0),
+    clicks: Number(data.clicks ?? 0),
+    lastEventAt: toISODate(data.lastEventAt),
+    updatedAt: toISODate(data.updatedAt),
+    createdAt: toISODate(data.createdAt),
+  } satisfies TrustBadgeWidgetDailyStatRecord;
+}
+
 async function fetchPrimaryBusinessByOwner(ownerUid: string) {
   const database = getDb();
-  const snapshots = await getDocs(
-    query(collection(database, "businessApplications"), where("ownerUid", "==", ownerUid), limit(40)),
+  let snapshots = await getDocs(
+    query(
+      collection(database, "businessApplications"),
+      where("ownerUid", "==", ownerUid),
+      where("status", "==", "approved"),
+      limit(40),
+    ),
   );
+  let canPatchMissingFields = false;
+
+  if (snapshots.empty) {
+    try {
+      snapshots = await getDocs(
+        query(
+          collection(database, "businessApplications"),
+          where("ownerUid", "==", ownerUid),
+          limit(40),
+        ),
+      );
+      canPatchMissingFields = true;
+    } catch (queryError) {
+      if (isFirestorePermissionError(queryError)) {
+        return null;
+      }
+      throw queryError;
+    }
+  }
+
   const rows = await Promise.all(
     snapshots.docs.map(async (snapshot) => {
       const raw = snapshot.data();
-      if (!raw.publicBusinessKey || !raw.employeeJoinKey || !raw.questionConversationMode) {
+      const missingMetadata =
+        !raw.publicBusinessKey || !raw.employeeJoinKey || !raw.questionConversationMode;
+      if (canPatchMissingFields && missingMetadata) {
         await updateDoc(doc(database, "businessApplications", snapshot.id), {
           publicBusinessKey: raw.publicBusinessKey || generateBusinessPublicKey(),
           employeeJoinKey: raw.employeeJoinKey || generateBusinessEmployeeJoinKey(),
@@ -696,7 +780,8 @@ async function fetchPrimaryBusinessByOwner(ownerUid: string) {
       }
       return mapBusinessApplication(snapshot.id, {
         ...raw,
-        publicBusinessKey: raw.publicBusinessKey || `BVB-${snapshot.id.slice(0, 8).toUpperCase()}`,
+        publicBusinessKey:
+          raw.publicBusinessKey || `BVB-${snapshot.id.slice(0, 8).toUpperCase()}`,
         employeeJoinKey: raw.employeeJoinKey || null,
         questionConversationMode: raw.questionConversationMode || "public",
       });
@@ -1915,6 +2000,94 @@ export async function fetchOwnedBusinessTrustBadge(ownerUid: string) {
   return fetchPublicBusinessTrustBadgeByBusinessId(business.id);
 }
 
+export async function recordTrustBadgeWidgetEvent(payload: {
+  businessId: string;
+  eventType: TrustBadgeWidgetEventType;
+}) {
+  const business = await fetchBusinessApplicationById(payload.businessId);
+  if (!business || business.status !== "approved") {
+    return false;
+  }
+  const database = getDb();
+  const now = new Date();
+  const dateKey = now.toISOString().slice(0, 10);
+  const statRef = doc(database, "trustBadgeWidgetDailyStats", `${business.id}_${dateKey}`);
+  const impressionInc = payload.eventType === "impression" ? 1 : 0;
+  const clickInc = payload.eventType === "click" ? 1 : 0;
+
+  await runTransaction(database, async (transaction) => {
+    const snapshot = await transaction.get(statRef);
+    if (!snapshot.exists()) {
+      transaction.set(statRef, {
+        businessId: business.id,
+        ownerUid: business.ownerUid,
+        businessName: business.businessName,
+        dateKey,
+        impressions: impressionInc,
+        clicks: clickInc,
+        lastEventAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+
+    const current = snapshot.data();
+    transaction.update(statRef, {
+      impressions: Math.max(0, Number(current.impressions ?? 0) + impressionInc),
+      clicks: Math.max(0, Number(current.clicks ?? 0) + clickInc),
+      lastEventAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  return true;
+}
+
+export async function fetchTrustBadgeWidgetSummaryByOwner(
+  ownerUid: string,
+  days = 30,
+): Promise<TrustBadgeWidgetSummaryRecord | null> {
+  const badge = await fetchOwnedBusinessTrustBadge(ownerUid);
+  if (!badge) return null;
+
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "trustBadgeWidgetDailyStats"),
+      where("businessId", "==", badge.businessId),
+      limit(540),
+    ),
+  );
+
+  const allRows = snapshots.docs
+    .map((snapshot) => mapTrustBadgeWidgetDailyStat(snapshot.id, snapshot.data()))
+    .sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+
+  const limitedDays = Math.max(1, Math.min(365, Math.round(days)));
+  const daily = allRows.slice(0, limitedDays);
+  const totalImpressions = allRows.reduce((sum, row) => sum + row.impressions, 0);
+  const totalClicks = allRows.reduce((sum, row) => sum + row.clicks, 0);
+  const ctrPercent =
+    totalImpressions > 0 ? Number(((totalClicks / totalImpressions) * 100).toFixed(2)) : 0;
+  const lastEventAt = allRows
+    .map((row) => Date.parse(row.lastEventAt))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => b - a)[0];
+
+  return {
+    businessId: badge.businessId,
+    businessName: badge.businessName,
+    totalImpressions,
+    totalClicks,
+    ctrPercent,
+    lastEventAt: Number.isFinite(lastEventAt)
+      ? new Date(lastEventAt).toISOString()
+      : undefined,
+    daily,
+  } satisfies TrustBadgeWidgetSummaryRecord;
+}
+
 export async function isBusinessFollowed(applicationId: string, followerUid: string) {
   const database = getDb();
   const snapshot = await getDoc(
@@ -2958,10 +3131,27 @@ export async function regenerateAuthenticatorBackupCodes(payload: {
 
 export async function createSupportTicket(input: SupportTicketInput) {
   const database = getDb();
+  const participantUids = [input.customerUid];
+  let normalizedBusinessName = input.businessName;
+  if (input.businessId) {
+    const businessSnapshot = await getDoc(
+      doc(database, "businessApplications", input.businessId),
+    );
+    if (businessSnapshot.exists()) {
+      const businessData = businessSnapshot.data();
+      if (businessData.ownerUid) {
+        participantUids.push(String(businessData.ownerUid));
+      }
+      if (businessData.businessName) {
+        normalizedBusinessName = String(businessData.businessName);
+      }
+    }
+  }
   const ticketRef = await addDoc(collection(database, "supportTickets"), {
     ...input,
+    businessName: normalizedBusinessName,
     status: "open",
-    participantUids: [input.customerUid],
+    participantUids: Array.from(new Set(participantUids)),
     escalationCount: 0,
     reopenedCount: 0,
     lastMessagePreview: input.description.slice(0, 160),
@@ -3252,6 +3442,7 @@ export interface DigitalProductInput {
   price: number;
   noRefund: boolean;
   category: string;
+  stockAvailable?: number;
   pricingPlans?: DigitalProductPricingPlanInput[];
 }
 
@@ -3305,6 +3496,7 @@ export interface BusinessServiceInput {
   currency: "INR" | "USD";
   serviceMode: BusinessServiceMode;
   deliveryMode: BusinessServiceDeliveryMode;
+  stockAvailable?: number;
 }
 
 export interface BusinessServiceRecord extends BusinessServiceInput {
@@ -3461,7 +3653,10 @@ function mapDigitalProduct(snapshotId: string, data: Record<string, unknown>) {
         ? (data.externalSource as CatalogIntegrationProvider)
         : undefined,
     externalProductId: data.externalProductId ? String(data.externalProductId) : undefined,
-    stockAvailable: data.stockAvailable ? Number(data.stockAvailable) : undefined,
+    stockAvailable:
+      data.stockAvailable === null || data.stockAvailable === undefined
+        ? undefined
+        : Number(data.stockAvailable),
     externalStoreUrl: data.externalStoreUrl ? String(data.externalStoreUrl) : undefined,
     lastSyncedAt: data.lastSyncedAt ? String(data.lastSyncedAt) : undefined,
     createdAt: toISODate(data.createdAt),
@@ -3503,7 +3698,10 @@ function mapBusinessService(snapshotId: string, data: Record<string, unknown>) {
         ? (data.externalSource as CatalogIntegrationProvider)
         : undefined,
     externalProductId: data.externalProductId ? String(data.externalProductId) : undefined,
-    stockAvailable: data.stockAvailable ? Number(data.stockAvailable) : undefined,
+    stockAvailable:
+      data.stockAvailable === null || data.stockAvailable === undefined
+        ? undefined
+        : Number(data.stockAvailable),
     externalStoreUrl: data.externalStoreUrl ? String(data.externalStoreUrl) : undefined,
     lastSyncedAt: data.lastSyncedAt ? String(data.lastSyncedAt) : undefined,
     createdAt: toISODate(data.createdAt),
@@ -3678,19 +3876,31 @@ async function enrichProductsWithSocialProof(rows: DigitalProductRecord[]) {
 
   const enrichedRows = await Promise.all(
     rows.map(async (row) => {
-      const [orderSnapshots, reviewSnapshots] = await Promise.all([
+      const [orderSnapshotsResult, reviewSnapshotsResult] = await Promise.allSettled([
         getDocs(query(collection(database, "orders"), where("productId", "==", row.id), limit(400))),
         getDocs(
           query(collection(database, "productReviews"), where("productId", "==", row.id), limit(250)),
         ),
       ]);
-      const orders = orderSnapshots.docs.map((snapshot) => mapOrder(snapshot.id, snapshot.data()));
-      const salesCount = orders.filter((order) => order.status !== "refund_requested").length;
-      const refundCount = orders.filter((order) => order.status === "refunded").length;
+      const orders =
+        orderSnapshotsResult.status === "fulfilled"
+          ? orderSnapshotsResult.value.docs.map((snapshot) => mapOrder(snapshot.id, snapshot.data()))
+          : [];
+      const salesCount =
+        orders.length > 0
+          ? orders.filter((order) => order.status !== "refund_requested").length
+          : row.salesCount ?? 0;
+      const refundCount =
+        orders.length > 0
+          ? orders.filter((order) => order.status === "refunded").length
+          : row.refundCount ?? 0;
 
-      const reviews = reviewSnapshots.docs
-        .map((snapshot) => mapProductReview(snapshot.id, snapshot.data()))
-        .filter((review) => !review.hiddenFromPublic);
+      const reviews =
+        reviewSnapshotsResult.status === "fulfilled"
+          ? reviewSnapshotsResult.value.docs
+              .map((snapshot) => mapProductReview(snapshot.id, snapshot.data()))
+              .filter((review) => !review.hiddenFromPublic)
+          : [];
       const reviewsCount = reviews.length;
       const averageRating = reviewsCount
         ? Number(
@@ -3719,6 +3929,7 @@ async function enrichProductsWithSocialProof(rows: DigitalProductRecord[]) {
 
 export async function createDigitalProduct(input: DigitalProductInput) {
   const database = getDb();
+  const owner = await fetchPrimaryBusinessByOwner(input.ownerUid);
   const baseSlug = `${toSlug(input.title)}-${Math.random().toString(36).slice(2, 8)}`;
   const pricingPlans = normalizePricingPlans(input.pricingPlans, input.price);
   const ref = await addDoc(collection(database, "digitalProducts"), {
@@ -3727,8 +3938,22 @@ export async function createDigitalProduct(input: DigitalProductInput) {
     pricingPlans,
     uniqueLinkSlug: baseSlug,
     favoritesCount: 0,
+    ownerBusinessSlug: owner?.slug ?? null,
+    ownerTrustScore: owner?.trustScore ?? 0,
+    ownerCertificateSerial: owner?.certificateSerial ?? null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+  });
+  await appendInventoryLog({
+    ownerUid: input.ownerUid,
+    businessId: owner?.id,
+    itemType: "product",
+    itemId: ref.id,
+    itemTitle: input.title,
+    source: "manual_create",
+    previousStock: undefined,
+    nextStock: input.stockAvailable,
+    note: "Created manually from product manager.",
   });
   return ref.id;
 }
@@ -3749,6 +3974,17 @@ export async function createBusinessService(input: BusinessServiceInput) {
     ownerCertificateSerial: owner.certificateSerial ?? null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+  });
+  await appendInventoryLog({
+    ownerUid: input.ownerUid,
+    businessId: owner.id,
+    itemType: "service",
+    itemId: ref.id,
+    itemTitle: input.title,
+    source: "manual_create",
+    previousStock: undefined,
+    nextStock: input.stockAvailable,
+    note: "Created manually from service manager.",
   });
   return ref.id;
 }
@@ -3935,6 +4171,7 @@ async function upsertExternalProduct(payload: {
     .slice(0, 120);
   const productRef = doc(database, "digitalProducts", syncDocId);
   const row = await getDoc(productRef);
+  const previousStock = row.exists() ? Number(row.data().stockAvailable ?? 0) : undefined;
   const data = {
     ownerUid: payload.ownerUid,
     ownerName: payload.ownerName,
@@ -3963,6 +4200,18 @@ async function upsertExternalProduct(payload: {
   };
   if (row.exists()) {
     await updateDoc(productRef, data);
+    if (previousStock !== payload.item.stock) {
+      await appendInventoryLog({
+        ownerUid: payload.ownerUid,
+        itemType: "product",
+        itemId: productRef.id,
+        itemTitle: payload.item.title,
+        source: "catalog_sync",
+        previousStock,
+        nextStock: payload.item.stock,
+        note: `${payload.provider} sync update`,
+      });
+    }
     return "updated";
   }
   await setDoc(productRef, {
@@ -3974,6 +4223,16 @@ async function upsertExternalProduct(payload: {
     reviewsCount: 0,
     averageRating: 0,
     createdAt: serverTimestamp(),
+  });
+  await appendInventoryLog({
+    ownerUid: payload.ownerUid,
+    itemType: "product",
+    itemId: productRef.id,
+    itemTitle: payload.item.title,
+    source: "catalog_sync",
+    previousStock: undefined,
+    nextStock: payload.item.stock,
+    note: `${payload.provider} sync import`,
   });
   return "created";
 }
@@ -3993,6 +4252,7 @@ async function upsertExternalService(payload: {
     .slice(0, 120);
   const serviceRef = doc(database, "businessServices", syncDocId);
   const row = await getDoc(serviceRef);
+  const previousStock = row.exists() ? Number(row.data().stockAvailable ?? 0) : undefined;
   const data = {
     ownerUid: payload.ownerUid,
     ownerName: payload.ownerName,
@@ -4015,12 +4275,34 @@ async function upsertExternalService(payload: {
   };
   if (row.exists()) {
     await updateDoc(serviceRef, data);
+    if (previousStock !== payload.item.stock) {
+      await appendInventoryLog({
+        ownerUid: payload.ownerUid,
+        itemType: "service",
+        itemId: serviceRef.id,
+        itemTitle: payload.item.title,
+        source: "catalog_sync",
+        previousStock,
+        nextStock: payload.item.stock,
+        note: `${payload.provider} sync update`,
+      });
+    }
     return "updated";
   }
   await setDoc(serviceRef, {
     ...data,
     uniqueLinkSlug: `${toSlug(payload.item.title)}-${Math.random().toString(36).slice(2, 8)}`,
     createdAt: serverTimestamp(),
+  });
+  await appendInventoryLog({
+    ownerUid: payload.ownerUid,
+    itemType: "service",
+    itemId: serviceRef.id,
+    itemTitle: payload.item.title,
+    source: "catalog_sync",
+    previousStock: undefined,
+    nextStock: payload.item.stock,
+    note: `${payload.provider} sync import`,
   });
   return "created";
 }
@@ -4602,6 +4884,19 @@ export async function customerResolveProductReview(payload: {
 
 export type OrderStatus = "paid" | "refund_requested" | "refunded" | "released";
 
+export interface CheckoutPricingBreakdownRecord {
+  baseAmountInr: number;
+  discountAmountInr: number;
+  shippingAmountInr: number;
+  taxAmountInr: number;
+  finalAmountInr: number;
+  appliedCouponCode?: string;
+  appliedCouponId?: string;
+  shippingZoneId?: string;
+  shippingZoneLabel?: string;
+  taxRuleIds: string[];
+}
+
 export interface OrderRecord {
   id: string;
   productId: string;
@@ -4613,6 +4908,16 @@ export interface OrderRecord {
   customerName: string;
   customerEmail: string;
   amount: number;
+  currency: PaymentCurrency;
+  baseAmountInr: number;
+  discountAmountInr: number;
+  shippingAmountInr: number;
+  taxAmountInr: number;
+  appliedCouponCode?: string;
+  appliedCouponId?: string;
+  shippingZoneId?: string;
+  shippingZoneLabel?: string;
+  appliedTaxRuleIds: string[];
   pricingPlanKey?: string;
   pricingPlanName?: string;
   pricingPlanBillingCycle?: DigitalProductPricingCycle;
@@ -4628,6 +4933,22 @@ export interface OrderRecord {
 }
 
 function mapOrder(snapshotId: string, data: Record<string, unknown>) {
+  const normalizedCurrency = normalizePaymentCurrency(data.currency);
+  const pricing = (data.pricingBreakdown as Record<string, unknown> | undefined) ?? undefined;
+  const baseAmountInr = Number(
+    pricing?.baseAmountInr ??
+      data.baseAmountInr ??
+      data.amount ??
+      0,
+  );
+  const discountAmountInr = Number(pricing?.discountAmountInr ?? data.discountAmountInr ?? 0);
+  const shippingAmountInr = Number(pricing?.shippingAmountInr ?? data.shippingAmountInr ?? 0);
+  const taxAmountInr = Number(pricing?.taxAmountInr ?? data.taxAmountInr ?? 0);
+  const appliedTaxRuleIds = Array.isArray(pricing?.taxRuleIds)
+    ? (pricing?.taxRuleIds as unknown[]).map((entry) => String(entry))
+    : Array.isArray(data.appliedTaxRuleIds)
+      ? (data.appliedTaxRuleIds as unknown[]).map((entry) => String(entry))
+      : [];
   return {
     id: snapshotId,
     productId: String(data.productId ?? ""),
@@ -4639,6 +4960,32 @@ function mapOrder(snapshotId: string, data: Record<string, unknown>) {
     customerName: String(data.customerName ?? "Customer"),
     customerEmail: String(data.customerEmail ?? ""),
     amount: Number(data.amount ?? 0),
+    currency: normalizedCurrency,
+    baseAmountInr,
+    discountAmountInr,
+    shippingAmountInr,
+    taxAmountInr,
+    appliedCouponCode: data.appliedCouponCode
+      ? String(data.appliedCouponCode)
+      : pricing?.appliedCouponCode
+        ? String(pricing.appliedCouponCode)
+        : undefined,
+    appliedCouponId: data.appliedCouponId
+      ? String(data.appliedCouponId)
+      : pricing?.appliedCouponId
+        ? String(pricing.appliedCouponId)
+        : undefined,
+    shippingZoneId: data.shippingZoneId
+      ? String(data.shippingZoneId)
+      : pricing?.shippingZoneId
+        ? String(pricing.shippingZoneId)
+        : undefined,
+    shippingZoneLabel: data.shippingZoneLabel
+      ? String(data.shippingZoneLabel)
+      : pricing?.shippingZoneLabel
+        ? String(pricing.shippingZoneLabel)
+        : undefined,
+    appliedTaxRuleIds,
     pricingPlanKey: data.pricingPlanKey ? String(data.pricingPlanKey) : undefined,
     pricingPlanName: data.pricingPlanName ? String(data.pricingPlanName) : undefined,
     pricingPlanBillingCycle: data.pricingPlanBillingCycle
@@ -4661,11 +5008,21 @@ async function createOrderAndEscrowFromProduct(params: {
   customer: { uid: string; name: string; email: string };
   selectedPlan: DigitalProductPricingPlanRecord;
   paymentIntentId?: string;
+  currency?: PaymentCurrency;
+  pricingBreakdown?: CheckoutPricingBreakdownRecord;
 }) {
   const database = getDb();
   const now = new Date();
   const releaseDate = new Date(now.getTime() + 45 * 24 * 60 * 60 * 1000);
   const refundDeadline = params.product.noRefund ? now : releaseDate;
+  const pricingBreakdown = params.pricingBreakdown ?? {
+    baseAmountInr: params.selectedPlan.price,
+    discountAmountInr: 0,
+    shippingAmountInr: 0,
+    taxAmountInr: 0,
+    finalAmountInr: params.selectedPlan.price,
+    taxRuleIds: [],
+  };
 
   const orderRef = await addDoc(collection(database, "orders"), {
     productId: params.product.id,
@@ -4676,7 +5033,18 @@ async function createOrderAndEscrowFromProduct(params: {
     customerUid: params.customer.uid,
     customerName: params.customer.name,
     customerEmail: params.customer.email,
-    amount: params.selectedPlan.price,
+    amount: pricingBreakdown.finalAmountInr,
+    currency: params.currency ?? "INR",
+    baseAmountInr: pricingBreakdown.baseAmountInr,
+    discountAmountInr: pricingBreakdown.discountAmountInr,
+    shippingAmountInr: pricingBreakdown.shippingAmountInr,
+    taxAmountInr: pricingBreakdown.taxAmountInr,
+    appliedCouponCode: pricingBreakdown.appliedCouponCode ?? null,
+    appliedCouponId: pricingBreakdown.appliedCouponId ?? null,
+    shippingZoneId: pricingBreakdown.shippingZoneId ?? null,
+    shippingZoneLabel: pricingBreakdown.shippingZoneLabel ?? null,
+    appliedTaxRuleIds: pricingBreakdown.taxRuleIds,
+    pricingBreakdown,
     pricingPlanKey: params.selectedPlan.key,
     pricingPlanName: params.selectedPlan.name,
     pricingPlanBillingCycle: params.selectedPlan.billingCycle,
@@ -4695,12 +5063,22 @@ async function createOrderAndEscrowFromProduct(params: {
   await addDoc(collection(database, "escrowEntries"), {
     orderId: orderRef.id,
     businessOwnerUid: params.product.ownerUid,
-    amount: params.selectedPlan.price,
+    amount: pricingBreakdown.finalAmountInr,
     status: "locked",
     releaseAt: releaseDate.toISOString(),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  if (pricingBreakdown.appliedCouponId) {
+    try {
+      await updateDoc(doc(database, "businessShopCoupons", pricingBreakdown.appliedCouponId), {
+        usedCount: increment(1),
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // If coupon record was removed concurrently, keep the order successful.
+    }
+  }
 
   return orderRef.id;
 }
@@ -4709,16 +5087,32 @@ export async function createOrderFromProduct(
   productSlug: string,
   customer: { uid: string; name: string; email: string },
   pricingPlanKey?: string,
+  options?: {
+    couponCode?: string;
+    shippingZoneId?: string;
+    checkoutCountry?: string;
+    checkoutCity?: string;
+  },
 ) {
   const product = await fetchDigitalProductBySlug(productSlug);
   if (!product) {
     throw new Error("Product not found.");
   }
   const selectedPlan = resolveProductPricingPlan(product, pricingPlanKey);
+  const checkoutPricing = await computeCheckoutPricingForProduct({
+    businessOwnerUid: product.ownerUid,
+    selectedPlanPriceInr: selectedPlan.price,
+    pricingPlanKey: selectedPlan.key,
+    customerUid: customer.uid,
+    couponCode: options?.couponCode,
+    shippingZoneId: options?.shippingZoneId,
+    checkoutCountry: options?.checkoutCountry,
+    checkoutCity: options?.checkoutCity,
+  });
 
   await debitWalletBalance({
     ownerUid: customer.uid,
-    amount: selectedPlan.price,
+    amount: checkoutPricing.finalAmountInr,
     reason: `Purchase: ${product.title} (${selectedPlan.name})`,
     type: "purchase_debit",
     referenceId: product.id,
@@ -4728,6 +5122,8 @@ export async function createOrderFromProduct(
     product,
     customer,
     selectedPlan,
+    pricingBreakdown: checkoutPricing,
+    currency: "INR",
   });
 }
 
@@ -5062,6 +5458,11 @@ export interface PaymentIntentRecord {
   status: PaymentIntentStatus;
   productSlug?: string;
   pricingPlanKey?: string;
+  pricingBreakdown?: CheckoutPricingBreakdownRecord;
+  appliedCouponCode?: string;
+  shippingZoneId?: string;
+  shippingZoneLabel?: string;
+  abandonedCheckoutId?: string;
   orderId?: string;
   paymentUrl?: string;
   providerOrderId?: string;
@@ -5578,6 +5979,31 @@ function convertAmountForCurrency(amountInInr: number, currency: PaymentCurrency
 function mapPaymentIntent(snapshotId: string, data: Record<string, unknown>) {
   const currency = normalizePaymentCurrency(data.currency);
   const provider = String(data.provider ?? "mock").trim().toLowerCase();
+  const breakdownRaw = data.pricingBreakdown as Record<string, unknown> | undefined;
+  const pricingBreakdown = breakdownRaw
+    ? {
+        baseAmountInr: Number(breakdownRaw.baseAmountInr ?? data.amount ?? 0),
+        discountAmountInr: Number(breakdownRaw.discountAmountInr ?? 0),
+        shippingAmountInr: Number(breakdownRaw.shippingAmountInr ?? 0),
+        taxAmountInr: Number(breakdownRaw.taxAmountInr ?? 0),
+        finalAmountInr: Number(breakdownRaw.finalAmountInr ?? data.amount ?? 0),
+        appliedCouponCode: breakdownRaw.appliedCouponCode
+          ? String(breakdownRaw.appliedCouponCode)
+          : undefined,
+        appliedCouponId: breakdownRaw.appliedCouponId
+          ? String(breakdownRaw.appliedCouponId)
+          : undefined,
+        shippingZoneId: breakdownRaw.shippingZoneId
+          ? String(breakdownRaw.shippingZoneId)
+          : undefined,
+        shippingZoneLabel: breakdownRaw.shippingZoneLabel
+          ? String(breakdownRaw.shippingZoneLabel)
+          : undefined,
+        taxRuleIds: Array.isArray(breakdownRaw.taxRuleIds)
+          ? (breakdownRaw.taxRuleIds as unknown[]).map((entry) => String(entry))
+          : [],
+      }
+    : undefined;
   return {
     id: snapshotId,
     ownerUid: String(data.ownerUid ?? ""),
@@ -5593,6 +6019,17 @@ function mapPaymentIntent(snapshotId: string, data: Record<string, unknown>) {
     status: (String(data.status ?? "created") as PaymentIntentStatus) ?? "created",
     productSlug: data.productSlug ? String(data.productSlug) : undefined,
     pricingPlanKey: data.pricingPlanKey ? String(data.pricingPlanKey) : undefined,
+    pricingBreakdown,
+    appliedCouponCode: data.appliedCouponCode
+      ? String(data.appliedCouponCode)
+      : pricingBreakdown?.appliedCouponCode,
+    shippingZoneId: data.shippingZoneId
+      ? String(data.shippingZoneId)
+      : pricingBreakdown?.shippingZoneId,
+    shippingZoneLabel: data.shippingZoneLabel
+      ? String(data.shippingZoneLabel)
+      : pricingBreakdown?.shippingZoneLabel,
+    abandonedCheckoutId: data.abandonedCheckoutId ? String(data.abandonedCheckoutId) : undefined,
     orderId: data.orderId ? String(data.orderId) : undefined,
     paymentUrl: data.paymentUrl ? String(data.paymentUrl) : undefined,
     providerOrderId: data.providerOrderId ? String(data.providerOrderId) : undefined,
@@ -5674,14 +6111,50 @@ export async function createProductCheckoutPaymentIntent(payload: {
   pricingPlanKey?: string;
   provider?: PaymentProvider;
   currency?: PaymentCurrency;
+  couponCode?: string;
+  shippingZoneId?: string;
+  checkoutCountry?: string;
+  checkoutCity?: string;
 }) {
   const product = await fetchDigitalProductBySlug(payload.productSlug);
   if (!product) throw new Error("Product not found.");
   const selectedPlan = resolveProductPricingPlan(product, payload.pricingPlanKey);
+  const checkoutPricing = await computeCheckoutPricingForProduct({
+    businessOwnerUid: product.ownerUid,
+    selectedPlanPriceInr: selectedPlan.price,
+    pricingPlanKey: selectedPlan.key,
+    customerUid: payload.ownerUid,
+    couponCode: payload.couponCode,
+    shippingZoneId: payload.shippingZoneId,
+    checkoutCountry: payload.checkoutCountry,
+    checkoutCity: payload.checkoutCity,
+  });
   const database = getDb();
   const provider = payload.provider ?? paymentProviderFromEnv();
   const currency = normalizePaymentCurrency(payload.currency);
-  const amount = convertAmountForCurrency(selectedPlan.price, currency);
+  const amount = convertAmountForCurrency(checkoutPricing.finalAmountInr, currency);
+  const abandonedCheckoutRef = await addDoc(collection(database, "abandonedCheckouts"), {
+    ownerUid: payload.ownerUid,
+    ownerName: payload.ownerName,
+    ownerEmail: payload.ownerEmail,
+    businessOwnerUid: product.ownerUid,
+    businessOwnerName: product.ownerName,
+    productId: product.id,
+    productSlug: product.uniqueLinkSlug,
+    productTitle: product.title,
+    pricingPlanKey: selectedPlan.key,
+    pricingPlanName: selectedPlan.name,
+    pricingPlanBillingCycle: selectedPlan.billingCycle,
+    currency,
+    status: "open",
+    paymentIntentId: null,
+    orderId: null,
+    checkoutCountry: payload.checkoutCountry?.trim() || null,
+    checkoutCity: payload.checkoutCity?.trim() || null,
+    pricingBreakdown: checkoutPricing,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
   const intentRef = await addDoc(collection(database, "paymentIntents"), {
     ownerUid: payload.ownerUid,
     ownerName: payload.ownerName,
@@ -5692,6 +6165,11 @@ export async function createProductCheckoutPaymentIntent(payload: {
     purpose: "product_checkout",
     productSlug: product.uniqueLinkSlug,
     pricingPlanKey: selectedPlan.key,
+    pricingBreakdown: checkoutPricing,
+    appliedCouponCode: checkoutPricing.appliedCouponCode ?? null,
+    shippingZoneId: checkoutPricing.shippingZoneId ?? null,
+    shippingZoneLabel: checkoutPricing.shippingZoneLabel ?? null,
+    abandonedCheckoutId: abandonedCheckoutRef.id,
     status: "created",
     paymentUrl: "",
     providerOrderId: "",
@@ -5703,8 +6181,20 @@ export async function createProductCheckoutPaymentIntent(payload: {
       pricingPlanName: selectedPlan.name,
       pricingPlanBillingCycle: selectedPlan.billingCycle,
       baseAmountInr: String(selectedPlan.price),
+      discountAmountInr: String(checkoutPricing.discountAmountInr),
+      shippingAmountInr: String(checkoutPricing.shippingAmountInr),
+      taxAmountInr: String(checkoutPricing.taxAmountInr),
+      finalAmountInr: String(checkoutPricing.finalAmountInr),
+      appliedCouponCode: checkoutPricing.appliedCouponCode ?? "",
+      shippingZoneId: checkoutPricing.shippingZoneId ?? "",
+      shippingZoneLabel: checkoutPricing.shippingZoneLabel ?? "",
+      abandonedCheckoutId: abandonedCheckoutRef.id,
     },
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  await updateDoc(doc(database, "abandonedCheckouts", abandonedCheckoutRef.id), {
+    paymentIntentId: intentRef.id,
     updatedAt: serverTimestamp(),
   });
   const paymentUrl =
@@ -5829,6 +6319,20 @@ export async function markPaymentIntentAsPaid(payload: {
       },
       selectedPlan,
       paymentIntentId: intent.id,
+      currency: intent.currency,
+      pricingBreakdown:
+        intent.pricingBreakdown ??
+        {
+          baseAmountInr: Number(intent.metadata?.baseAmountInr ?? selectedPlan.price),
+          discountAmountInr: Number(intent.metadata?.discountAmountInr ?? 0),
+          shippingAmountInr: Number(intent.metadata?.shippingAmountInr ?? 0),
+          taxAmountInr: Number(intent.metadata?.taxAmountInr ?? 0),
+          finalAmountInr: Number(intent.metadata?.finalAmountInr ?? selectedPlan.price),
+          appliedCouponCode: intent.appliedCouponCode,
+          shippingZoneId: intent.shippingZoneId,
+          shippingZoneLabel: intent.shippingZoneLabel,
+          taxRuleIds: [],
+        },
     });
   }
 
@@ -5845,6 +6349,14 @@ export async function markPaymentIntentAsPaid(payload: {
     paidAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  if (intent.abandonedCheckoutId) {
+    await updateDoc(doc(database, "abandonedCheckouts", intent.abandonedCheckoutId), {
+      status: "recovered",
+      orderId: orderId ?? null,
+      recoveredAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
 
   await recordAuditEvent({
     actorUid: payload.actorUid,
@@ -5875,11 +6387,23 @@ export async function markPaymentIntentAsFailed(payload: {
   actorRole: "customer" | "admin" | "system";
 }) {
   const database = getDb();
-  await updateDoc(doc(database, "paymentIntents", payload.intentId), {
+  const intentRef = doc(database, "paymentIntents", payload.intentId);
+  await updateDoc(intentRef, {
     status: "failed",
     failureReason: payload.reason,
     updatedAt: serverTimestamp(),
   });
+  const intentSnapshot = await getDoc(intentRef);
+  if (intentSnapshot.exists()) {
+    const intent = mapPaymentIntent(intentSnapshot.id, intentSnapshot.data());
+    if (intent.abandonedCheckoutId) {
+      await updateDoc(doc(database, "abandonedCheckouts", intent.abandonedCheckoutId), {
+        status: "abandoned",
+        failureReason: payload.reason,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
   await recordAuditEvent({
     actorUid: payload.actorUid,
     actorRole: payload.actorRole,
@@ -10143,5 +10667,1098 @@ export async function completePartnershipDeal(payload: {
   });
 
   return { feeAmount };
+}
+
+export type BusinessShopThemeKey =
+  | "clean_modern"
+  | "classic_store"
+  | "midnight_premium"
+  | "sunrise_market"
+  | "minimal_grid";
+
+export type BusinessShopCurrencyMode = "INR" | "USD" | "BOTH";
+
+export interface BusinessShopSettingsInput {
+  storeTitle: string;
+  storeTagline: string;
+  storeDescription: string;
+  supportEmail: string;
+  supportPhone: string;
+  currencyMode: BusinessShopCurrencyMode;
+  themeKey: BusinessShopThemeKey;
+  themeAccent: string;
+  customDomain?: string;
+  customDomainStatus:
+    | "not_set"
+    | "pending_verification"
+    | "verified"
+    | "rejected";
+  seoTitle: string;
+  seoDescription: string;
+  seoKeywords: string[];
+  allowGuestCheckout: boolean;
+  autoAcceptOrders: boolean;
+  enableCod: boolean;
+  enableWallet: boolean;
+  publishProducts: boolean;
+  publishServices: boolean;
+  showStock: boolean;
+  showTrustBadge: boolean;
+  lowStockThreshold: number;
+  orderNotificationEmail: string;
+  shippingPolicy: string;
+  returnPolicy: string;
+}
+
+export interface BusinessShopSettingsRecord extends BusinessShopSettingsInput {
+  id: string;
+  businessId: string;
+  businessSlug: string;
+  businessName: string;
+  ownerUid: string;
+  ownerName: string;
+  createdAt: string;
+  updatedAt: string;
+  lastPublishedAt?: string;
+}
+
+export interface PublicBusinessShopBundle {
+  business: BusinessApplicationRecord;
+  shop: BusinessShopSettingsRecord;
+}
+
+export type ShopCouponDiscountType = "percent" | "fixed";
+
+export interface ShopCouponInput {
+  code: string;
+  label: string;
+  description?: string;
+  discountType: ShopCouponDiscountType;
+  discountValue: number;
+  minOrderAmountInr: number;
+  maxDiscountAmountInr?: number;
+  usageLimitTotal?: number;
+  appliesToPlanKeys: string[];
+  startsAt?: string;
+  endsAt?: string;
+  active: boolean;
+}
+
+export interface ShopCouponRecord extends ShopCouponInput {
+  id: string;
+  ownerUid: string;
+  businessId: string;
+  businessSlug: string;
+  usedCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ShopTaxRuleScope = "global" | "country" | "city";
+
+export interface ShopTaxRuleInput {
+  label: string;
+  scope: ShopTaxRuleScope;
+  countryCode?: string;
+  city?: string;
+  ratePercent: number;
+  active: boolean;
+}
+
+export interface ShopTaxRuleRecord extends ShopTaxRuleInput {
+  id: string;
+  ownerUid: string;
+  businessId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShopShippingZoneInput {
+  label: string;
+  countries: string[];
+  cities: string[];
+  feeInr: number;
+  freeShippingMinOrderInr?: number;
+  active: boolean;
+}
+
+export interface ShopShippingZoneRecord extends ShopShippingZoneInput {
+  id: string;
+  ownerUid: string;
+  businessId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShopInventoryLogRecord {
+  id: string;
+  ownerUid: string;
+  businessId?: string;
+  itemType: "product" | "service";
+  itemId: string;
+  itemTitle: string;
+  source: "manual_create" | "manual_adjustment" | "catalog_sync";
+  previousStock?: number;
+  nextStock?: number;
+  change?: number;
+  note?: string;
+  createdAt: string;
+}
+
+export type AbandonedCheckoutStatus = "open" | "recovered" | "abandoned";
+
+export interface AbandonedCheckoutRecord {
+  id: string;
+  ownerUid: string;
+  ownerName: string;
+  ownerEmail: string;
+  businessOwnerUid: string;
+  businessOwnerName: string;
+  productId: string;
+  productSlug: string;
+  productTitle: string;
+  pricingPlanKey: string;
+  pricingPlanName: string;
+  pricingPlanBillingCycle: DigitalProductPricingCycle;
+  currency: PaymentCurrency;
+  status: AbandonedCheckoutStatus;
+  checkoutCountry?: string;
+  checkoutCity?: string;
+  pricingBreakdown: CheckoutPricingBreakdownRecord;
+  paymentIntentId?: string;
+  orderId?: string;
+  recoveredAt?: string;
+  failureReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShopCheckoutContextRecord {
+  coupons: ShopCouponRecord[];
+  shippingZones: ShopShippingZoneRecord[];
+  taxRules: ShopTaxRuleRecord[];
+}
+
+function normalizeCouponCode(value: string) {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, "");
+}
+
+function normalizeTaxScope(value: string): ShopTaxRuleScope {
+  if (value === "country" || value === "city") return value;
+  return "global";
+}
+
+function normalizeCountryCode(value: string | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "")
+    .slice(0, 3);
+}
+
+function normalizeCityName(value: string | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function mapShopCoupon(snapshotId: string, data: Record<string, unknown>) {
+  const code = normalizeCouponCode(String(data.code ?? ""));
+  return {
+    id: snapshotId,
+    ownerUid: String(data.ownerUid ?? ""),
+    businessId: String(data.businessId ?? ""),
+    businessSlug: String(data.businessSlug ?? ""),
+    code,
+    label: String((data.label ?? code) || "Coupon"),
+    description: data.description ? String(data.description) : undefined,
+    discountType: data.discountType === "fixed" ? "fixed" : "percent",
+    discountValue: Math.max(0, Number(data.discountValue ?? 0)),
+    minOrderAmountInr: Math.max(0, Number(data.minOrderAmountInr ?? 0)),
+    maxDiscountAmountInr: data.maxDiscountAmountInr
+      ? Math.max(0, Number(data.maxDiscountAmountInr))
+      : undefined,
+    usageLimitTotal: data.usageLimitTotal
+      ? Math.max(1, Math.round(Number(data.usageLimitTotal)))
+      : undefined,
+    appliesToPlanKeys: Array.isArray(data.appliesToPlanKeys)
+      ? (data.appliesToPlanKeys as unknown[]).map((entry) => String(entry).trim().toLowerCase()).filter(Boolean)
+      : [],
+    startsAt: data.startsAt ? String(data.startsAt) : undefined,
+    endsAt: data.endsAt ? String(data.endsAt) : undefined,
+    active: Boolean(data.active),
+    usedCount: Math.max(0, Number(data.usedCount ?? 0)),
+    createdAt: toISODate(data.createdAt),
+    updatedAt: toISODate(data.updatedAt),
+  } satisfies ShopCouponRecord;
+}
+
+function mapShopTaxRule(snapshotId: string, data: Record<string, unknown>) {
+  return {
+    id: snapshotId,
+    ownerUid: String(data.ownerUid ?? ""),
+    businessId: String(data.businessId ?? ""),
+    label: String(data.label ?? "Tax rule"),
+    scope: normalizeTaxScope(String(data.scope ?? "global")),
+    countryCode: data.countryCode ? String(data.countryCode) : undefined,
+    city: data.city ? String(data.city) : undefined,
+    ratePercent: Math.max(0, Number(data.ratePercent ?? 0)),
+    active: Boolean(data.active),
+    createdAt: toISODate(data.createdAt),
+    updatedAt: toISODate(data.updatedAt),
+  } satisfies ShopTaxRuleRecord;
+}
+
+function mapShopShippingZone(snapshotId: string, data: Record<string, unknown>) {
+  return {
+    id: snapshotId,
+    ownerUid: String(data.ownerUid ?? ""),
+    businessId: String(data.businessId ?? ""),
+    label: String(data.label ?? "Shipping zone"),
+    countries: Array.isArray(data.countries)
+      ? (data.countries as unknown[]).map((entry) => String(entry).trim().toUpperCase()).filter(Boolean)
+      : [],
+    cities: Array.isArray(data.cities)
+      ? (data.cities as unknown[]).map((entry) => String(entry).trim().toLowerCase()).filter(Boolean)
+      : [],
+    feeInr: Math.max(0, Number(data.feeInr ?? 0)),
+    freeShippingMinOrderInr: data.freeShippingMinOrderInr
+      ? Math.max(0, Number(data.freeShippingMinOrderInr))
+      : undefined,
+    active: Boolean(data.active),
+    createdAt: toISODate(data.createdAt),
+    updatedAt: toISODate(data.updatedAt),
+  } satisfies ShopShippingZoneRecord;
+}
+
+function mapShopInventoryLog(snapshotId: string, data: Record<string, unknown>) {
+  return {
+    id: snapshotId,
+    ownerUid: String(data.ownerUid ?? ""),
+    businessId: data.businessId ? String(data.businessId) : undefined,
+    itemType: data.itemType === "service" ? "service" : "product",
+    itemId: String(data.itemId ?? ""),
+    itemTitle: String(data.itemTitle ?? ""),
+    source: data.source === "catalog_sync"
+      ? "catalog_sync"
+      : data.source === "manual_adjustment"
+        ? "manual_adjustment"
+        : "manual_create",
+    previousStock: data.previousStock === null || data.previousStock === undefined
+      ? undefined
+      : Number(data.previousStock),
+    nextStock: data.nextStock === null || data.nextStock === undefined
+      ? undefined
+      : Number(data.nextStock),
+    change: data.change === null || data.change === undefined
+      ? undefined
+      : Number(data.change),
+    note: data.note ? String(data.note) : undefined,
+    createdAt: toISODate(data.createdAt),
+  } satisfies ShopInventoryLogRecord;
+}
+
+function mapAbandonedCheckout(snapshotId: string, data: Record<string, unknown>) {
+  const pricingRaw = (data.pricingBreakdown as Record<string, unknown> | undefined) ?? {};
+  return {
+    id: snapshotId,
+    ownerUid: String(data.ownerUid ?? ""),
+    ownerName: String(data.ownerName ?? "Customer"),
+    ownerEmail: String(data.ownerEmail ?? ""),
+    businessOwnerUid: String(data.businessOwnerUid ?? ""),
+    businessOwnerName: String(data.businessOwnerName ?? "Business"),
+    productId: String(data.productId ?? ""),
+    productSlug: String(data.productSlug ?? ""),
+    productTitle: String(data.productTitle ?? ""),
+    pricingPlanKey: String(data.pricingPlanKey ?? ""),
+    pricingPlanName: String(data.pricingPlanName ?? ""),
+    pricingPlanBillingCycle:
+      String(data.pricingPlanBillingCycle ?? "one_time") === "monthly"
+        ? "monthly"
+        : String(data.pricingPlanBillingCycle ?? "one_time") === "yearly"
+          ? "yearly"
+          : "one_time",
+    currency: normalizePaymentCurrency(data.currency),
+    status:
+      data.status === "recovered"
+        ? "recovered"
+        : data.status === "abandoned"
+          ? "abandoned"
+          : "open",
+    checkoutCountry: data.checkoutCountry ? String(data.checkoutCountry) : undefined,
+    checkoutCity: data.checkoutCity ? String(data.checkoutCity) : undefined,
+    pricingBreakdown: {
+      baseAmountInr: Number(pricingRaw.baseAmountInr ?? data.amount ?? 0),
+      discountAmountInr: Number(pricingRaw.discountAmountInr ?? 0),
+      shippingAmountInr: Number(pricingRaw.shippingAmountInr ?? 0),
+      taxAmountInr: Number(pricingRaw.taxAmountInr ?? 0),
+      finalAmountInr: Number(pricingRaw.finalAmountInr ?? data.amount ?? 0),
+      appliedCouponCode: pricingRaw.appliedCouponCode
+        ? String(pricingRaw.appliedCouponCode)
+        : undefined,
+      appliedCouponId: pricingRaw.appliedCouponId
+        ? String(pricingRaw.appliedCouponId)
+        : undefined,
+      shippingZoneId: pricingRaw.shippingZoneId
+        ? String(pricingRaw.shippingZoneId)
+        : undefined,
+      shippingZoneLabel: pricingRaw.shippingZoneLabel
+        ? String(pricingRaw.shippingZoneLabel)
+        : undefined,
+      taxRuleIds: Array.isArray(pricingRaw.taxRuleIds)
+        ? (pricingRaw.taxRuleIds as unknown[]).map((entry) => String(entry))
+        : [],
+    },
+    paymentIntentId: data.paymentIntentId ? String(data.paymentIntentId) : undefined,
+    orderId: data.orderId ? String(data.orderId) : undefined,
+    recoveredAt: data.recoveredAt ? toISODate(data.recoveredAt) : undefined,
+    failureReason: data.failureReason ? String(data.failureReason) : undefined,
+    createdAt: toISODate(data.createdAt),
+    updatedAt: toISODate(data.updatedAt),
+  } satisfies AbandonedCheckoutRecord;
+}
+
+function sortByUpdatedDesc<T extends { updatedAt: string }>(rows: T[]) {
+  return [...rows].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+function sortByCreatedDesc<T extends { createdAt: string }>(rows: T[]) {
+  return [...rows].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+async function fetchBusinessShopCheckoutContext(
+  businessOwnerUid: string,
+): Promise<ShopCheckoutContextRecord> {
+  const business = await fetchPrimaryBusinessByOwner(businessOwnerUid);
+  if (!business) {
+    return { coupons: [], shippingZones: [], taxRules: [] };
+  }
+  const database = getDb();
+  const [couponSnapshots, taxSnapshots, shippingSnapshots] = await Promise.all([
+    getDocs(
+      query(collection(database, "businessShopCoupons"), where("businessId", "==", business.id), limit(150)),
+    ),
+    getDocs(
+      query(collection(database, "businessShopTaxRules"), where("businessId", "==", business.id), limit(120)),
+    ),
+    getDocs(
+      query(collection(database, "businessShopShippingZones"), where("businessId", "==", business.id), limit(120)),
+    ),
+  ]);
+  const coupons = couponSnapshots.docs
+    .map((snapshot) => mapShopCoupon(snapshot.id, snapshot.data()))
+    .filter((row) => row.active);
+  const taxRules = taxSnapshots.docs
+    .map((snapshot) => mapShopTaxRule(snapshot.id, snapshot.data()))
+    .filter((row) => row.active);
+  const shippingZones = shippingSnapshots.docs
+    .map((snapshot) => mapShopShippingZone(snapshot.id, snapshot.data()))
+    .filter((row) => row.active);
+  return {
+    coupons: sortByUpdatedDesc(coupons),
+    shippingZones: sortByUpdatedDesc(shippingZones),
+    taxRules: sortByUpdatedDesc(taxRules),
+  };
+}
+
+function isCouponEligibleNow(coupon: ShopCouponRecord, now = new Date()) {
+  if (!coupon.active) return false;
+  if (coupon.startsAt && Date.parse(coupon.startsAt) > now.getTime()) return false;
+  if (coupon.endsAt && Date.parse(coupon.endsAt) < now.getTime()) return false;
+  if (coupon.usageLimitTotal && coupon.usedCount >= coupon.usageLimitTotal) return false;
+  return true;
+}
+
+export async function computeCheckoutPricingForProduct(payload: {
+  businessOwnerUid: string;
+  selectedPlanPriceInr: number;
+  pricingPlanKey?: string;
+  customerUid?: string;
+  couponCode?: string;
+  shippingZoneId?: string;
+  checkoutCountry?: string;
+  checkoutCity?: string;
+}) {
+  const baseAmountInr = Math.max(1, Math.round(Number(payload.selectedPlanPriceInr) || 0));
+  const context = await fetchBusinessShopCheckoutContext(payload.businessOwnerUid);
+  const now = new Date();
+  let discountAmountInr = 0;
+  let shippingAmountInr = 0;
+  let appliedCoupon: ShopCouponRecord | null = null;
+  let appliedShippingZone: ShopShippingZoneRecord | null = null;
+
+  const requestedCoupon = normalizeCouponCode(payload.couponCode ?? "");
+  if (requestedCoupon) {
+    const coupon = context.coupons.find((row) => row.code === requestedCoupon);
+    if (!coupon) {
+      throw new Error("Coupon code is invalid.");
+    }
+    if (!isCouponEligibleNow(coupon, now)) {
+      throw new Error("Coupon is not active.");
+    }
+    if (coupon.minOrderAmountInr > baseAmountInr) {
+      throw new Error(`Coupon requires minimum order INR ${coupon.minOrderAmountInr}.`);
+    }
+    if (coupon.appliesToPlanKeys.length) {
+      const key = String(payload.pricingPlanKey ?? "").trim().toLowerCase();
+      if (!coupon.appliesToPlanKeys.includes(key)) {
+        throw new Error("Coupon is not valid for selected pricing plan.");
+      }
+    }
+    const rawDiscount =
+      coupon.discountType === "fixed"
+        ? coupon.discountValue
+        : Math.round((baseAmountInr * coupon.discountValue) / 100);
+    discountAmountInr = Math.min(
+      baseAmountInr,
+      coupon.maxDiscountAmountInr
+        ? Math.min(rawDiscount, coupon.maxDiscountAmountInr)
+        : rawDiscount,
+    );
+    appliedCoupon = coupon;
+  }
+
+  if (payload.shippingZoneId?.trim()) {
+    const zone = context.shippingZones.find((row) => row.id === payload.shippingZoneId);
+    if (!zone) {
+      throw new Error("Shipping zone is invalid.");
+    }
+    const countryCode = normalizeCountryCode(payload.checkoutCountry);
+    const cityName = normalizeCityName(payload.checkoutCity);
+    if (zone.countries.length && countryCode && !zone.countries.includes(countryCode)) {
+      throw new Error("Shipping zone is not available for selected country.");
+    }
+    if (zone.cities.length && cityName && !zone.cities.includes(cityName)) {
+      throw new Error("Shipping zone is not available for selected city.");
+    }
+    const subtotalAfterDiscount = Math.max(baseAmountInr - discountAmountInr, 0);
+    shippingAmountInr =
+      zone.freeShippingMinOrderInr && subtotalAfterDiscount >= zone.freeShippingMinOrderInr
+        ? 0
+        : zone.feeInr;
+    appliedShippingZone = zone;
+  }
+
+  const countryCode = normalizeCountryCode(payload.checkoutCountry);
+  const cityName = normalizeCityName(payload.checkoutCity);
+  const applicableTaxRules = context.taxRules.filter((row) => {
+    if (!row.active) return false;
+    if (row.scope === "global") return true;
+    if (row.scope === "country") {
+      return normalizeCountryCode(row.countryCode) === countryCode;
+    }
+    if (!cityName) return false;
+    if (normalizeCityName(row.city) !== cityName) return false;
+    if (row.countryCode && countryCode) {
+      return normalizeCountryCode(row.countryCode) === countryCode;
+    }
+    return true;
+  });
+  const taxableAmount = Math.max(baseAmountInr - discountAmountInr + shippingAmountInr, 0);
+  const totalTaxRate = applicableTaxRules.reduce((sum, row) => sum + row.ratePercent, 0);
+  const taxAmountInr = Math.max(0, Math.round((taxableAmount * totalTaxRate) / 100));
+  const finalAmountInr = Math.max(
+    1,
+    Math.round(baseAmountInr - discountAmountInr + shippingAmountInr + taxAmountInr),
+  );
+  return {
+    baseAmountInr,
+    discountAmountInr,
+    shippingAmountInr,
+    taxAmountInr,
+    finalAmountInr,
+    appliedCouponCode: appliedCoupon?.code,
+    appliedCouponId: appliedCoupon?.id,
+    shippingZoneId: appliedShippingZone?.id,
+    shippingZoneLabel: appliedShippingZone?.label,
+    taxRuleIds: applicableTaxRules.map((row) => row.id),
+  } satisfies CheckoutPricingBreakdownRecord;
+}
+
+function normalizeThemeKey(value: string): BusinessShopThemeKey {
+  const clean = value.trim();
+  if (
+    clean === "clean_modern" ||
+    clean === "classic_store" ||
+    clean === "midnight_premium" ||
+    clean === "sunrise_market" ||
+    clean === "minimal_grid"
+  ) {
+    return clean;
+  }
+  return "clean_modern";
+}
+
+function normalizeShopDomain(raw: string | undefined) {
+  const value = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "");
+  if (!value) return "";
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(value)) return "";
+  return value;
+}
+
+function normalizeSeoKeywords(values: string[]) {
+  return Array.from(
+    new Set(
+      values
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, 24),
+    ),
+  );
+}
+
+function buildDefaultBusinessShopSettings(
+  business: BusinessApplicationRecord,
+): Omit<BusinessShopSettingsRecord, "id" | "createdAt" | "updatedAt"> {
+  return {
+    businessId: business.id,
+    businessSlug: business.slug,
+    businessName: business.businessName,
+    ownerUid: business.ownerUid,
+    ownerName: business.businessName,
+    storeTitle: `${business.businessName} Store`,
+    storeTagline: "Verified store with secure checkout",
+    storeDescription:
+      "This storefront is powered by Business Verifier with profile transparency, verified identity, and dispute-ready support.",
+    supportEmail: business.supportEmail,
+    supportPhone: business.supportPhone,
+    currencyMode: "BOTH",
+    themeKey: "clean_modern",
+    themeAccent: "#2563eb",
+    customDomain: "",
+    customDomainStatus: "not_set",
+    seoTitle: `${business.businessName} | Verified Store`,
+    seoDescription: `Shop with confidence at ${business.businessName}. Verified business details, secure payments, and transparent support.`,
+    seoKeywords: normalizeSeoKeywords([
+      business.businessName,
+      business.category,
+      "verified business",
+      "secure shopping",
+    ]),
+    allowGuestCheckout: false,
+    autoAcceptOrders: true,
+    enableCod: false,
+    enableWallet: true,
+    publishProducts: true,
+    publishServices: true,
+    showStock: true,
+    showTrustBadge: true,
+    lowStockThreshold: 10,
+    orderNotificationEmail: business.supportEmail,
+    shippingPolicy: "Shipping and delivery timelines are shared during checkout.",
+    returnPolicy:
+      "Returns and refunds follow product policy and platform dispute workflow.",
+  };
+}
+
+function mapBusinessShopSettings(snapshotId: string, data: Record<string, unknown>) {
+  return {
+    id: snapshotId,
+    businessId: String(data.businessId ?? ""),
+    businessSlug: String(data.businessSlug ?? ""),
+    businessName: String(data.businessName ?? ""),
+    ownerUid: String(data.ownerUid ?? ""),
+    ownerName: String(data.ownerName ?? "Business"),
+    storeTitle: String(data.storeTitle ?? "Store"),
+    storeTagline: String(data.storeTagline ?? ""),
+    storeDescription: String(data.storeDescription ?? ""),
+    supportEmail: String(data.supportEmail ?? ""),
+    supportPhone: String(data.supportPhone ?? ""),
+    currencyMode:
+      String(data.currencyMode ?? "INR") === "USD"
+        ? "USD"
+        : String(data.currencyMode ?? "INR") === "BOTH"
+          ? "BOTH"
+          : "INR",
+    themeKey: normalizeThemeKey(String(data.themeKey ?? "clean_modern")),
+    themeAccent: String(data.themeAccent ?? "#2563eb"),
+    customDomain: String(data.customDomain ?? ""),
+    customDomainStatus:
+      data.customDomainStatus === "verified"
+        ? "verified"
+        : data.customDomainStatus === "rejected"
+          ? "rejected"
+          : data.customDomainStatus === "pending_verification"
+            ? "pending_verification"
+            : "not_set",
+    seoTitle: String(data.seoTitle ?? ""),
+    seoDescription: String(data.seoDescription ?? ""),
+    seoKeywords: Array.isArray(data.seoKeywords)
+      ? normalizeSeoKeywords((data.seoKeywords as string[]).map((entry) => String(entry)))
+      : [],
+    allowGuestCheckout: Boolean(data.allowGuestCheckout),
+    autoAcceptOrders: Boolean(data.autoAcceptOrders),
+    enableCod: Boolean(data.enableCod),
+    enableWallet: Boolean(data.enableWallet),
+    publishProducts: Boolean(data.publishProducts),
+    publishServices: Boolean(data.publishServices),
+    showStock: Boolean(data.showStock),
+    showTrustBadge: Boolean(data.showTrustBadge),
+    lowStockThreshold: Math.max(0, Math.round(Number(data.lowStockThreshold ?? 10))),
+    orderNotificationEmail: String(data.orderNotificationEmail ?? ""),
+    shippingPolicy: String(data.shippingPolicy ?? ""),
+    returnPolicy: String(data.returnPolicy ?? ""),
+    createdAt: toISODate(data.createdAt),
+    updatedAt: toISODate(data.updatedAt),
+    lastPublishedAt: data.lastPublishedAt ? toISODate(data.lastPublishedAt) : undefined,
+  } satisfies BusinessShopSettingsRecord;
+}
+
+async function fetchOrCreateBusinessShopSettings(ownerUid: string) {
+  const database = getDb();
+  const business = await fetchPrimaryBusinessByOwner(ownerUid);
+  if (!business) {
+    throw new Error(
+      "Business profile not found. Complete business onboarding before using shop builder.",
+    );
+  }
+  const shopRef = doc(database, "businessShops", business.id);
+  const snapshot = await getDoc(shopRef);
+  if (!snapshot.exists()) {
+    const defaults = buildDefaultBusinessShopSettings(business);
+    await setDoc(shopRef, {
+      ...defaults,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    const created = await getDoc(shopRef);
+    return mapBusinessShopSettings(created.id, created.data() as Record<string, unknown>);
+  }
+  return mapBusinessShopSettings(snapshot.id, snapshot.data());
+}
+
+export async function fetchBusinessShopSettingsByOwner(ownerUid: string) {
+  return fetchOrCreateBusinessShopSettings(ownerUid);
+}
+
+export async function updateBusinessShopSettings(payload: {
+  ownerUid: string;
+  settings: Partial<BusinessShopSettingsInput>;
+  publishNow?: boolean;
+}) {
+  const database = getDb();
+  const current = await fetchOrCreateBusinessShopSettings(payload.ownerUid);
+  if (current.ownerUid !== payload.ownerUid) {
+    throw new Error("You do not have access to this shop settings profile.");
+  }
+
+  const nextCustomDomain = normalizeShopDomain(payload.settings.customDomain ?? current.customDomain);
+  const domainChanged = nextCustomDomain !== normalizeShopDomain(current.customDomain);
+  const nextStatus = !nextCustomDomain
+    ? "not_set"
+    : domainChanged
+      ? "pending_verification"
+      : payload.settings.customDomainStatus ?? current.customDomainStatus;
+
+  const nextKeywords = payload.settings.seoKeywords
+    ? normalizeSeoKeywords(payload.settings.seoKeywords)
+    : current.seoKeywords;
+
+  const updates: Record<string, unknown> = {
+    storeTitle: payload.settings.storeTitle?.trim() || current.storeTitle,
+    storeTagline: payload.settings.storeTagline?.trim() ?? current.storeTagline,
+    storeDescription:
+      payload.settings.storeDescription?.trim() ?? current.storeDescription,
+    supportEmail: payload.settings.supportEmail?.trim() || current.supportEmail,
+    supportPhone: payload.settings.supportPhone?.trim() || current.supportPhone,
+    currencyMode: payload.settings.currencyMode ?? current.currencyMode,
+    themeKey: normalizeThemeKey(payload.settings.themeKey ?? current.themeKey),
+    themeAccent: payload.settings.themeAccent?.trim() || current.themeAccent,
+    customDomain: nextCustomDomain,
+    customDomainStatus: nextStatus,
+    seoTitle: payload.settings.seoTitle?.trim() || current.seoTitle,
+    seoDescription:
+      payload.settings.seoDescription?.trim() || current.seoDescription,
+    seoKeywords: nextKeywords,
+    allowGuestCheckout: payload.settings.allowGuestCheckout ?? current.allowGuestCheckout,
+    autoAcceptOrders: payload.settings.autoAcceptOrders ?? current.autoAcceptOrders,
+    enableCod: payload.settings.enableCod ?? current.enableCod,
+    enableWallet: payload.settings.enableWallet ?? current.enableWallet,
+    publishProducts: payload.settings.publishProducts ?? current.publishProducts,
+    publishServices: payload.settings.publishServices ?? current.publishServices,
+    showStock: payload.settings.showStock ?? current.showStock,
+    showTrustBadge: payload.settings.showTrustBadge ?? current.showTrustBadge,
+    lowStockThreshold: Math.max(
+      0,
+      Math.round(payload.settings.lowStockThreshold ?? current.lowStockThreshold),
+    ),
+    orderNotificationEmail:
+      payload.settings.orderNotificationEmail?.trim() || current.orderNotificationEmail,
+    shippingPolicy:
+      payload.settings.shippingPolicy?.trim() || current.shippingPolicy,
+    returnPolicy: payload.settings.returnPolicy?.trim() || current.returnPolicy,
+    updatedAt: serverTimestamp(),
+  };
+  if (payload.publishNow) {
+    updates.lastPublishedAt = serverTimestamp();
+  }
+
+  await updateDoc(doc(database, "businessShops", current.businessId), updates);
+  const snapshot = await getDoc(doc(database, "businessShops", current.businessId));
+  return mapBusinessShopSettings(snapshot.id, snapshot.data() as Record<string, unknown>);
+}
+
+export async function fetchPublicBusinessShopBySlug(slug: string) {
+  const cleanSlug = slug.trim().toLowerCase();
+  if (!cleanSlug) return null;
+  const directory = await fetchPublicBusinessDirectory();
+  const business = directory.find((row) => row.slug === cleanSlug);
+  if (!business) return null;
+  const database = getDb();
+  const snapshot = await getDoc(doc(database, "businessShops", business.id));
+  if (!snapshot.exists()) {
+    const defaults = buildDefaultBusinessShopSettings(business);
+    return {
+      business,
+      shop: {
+        id: business.id,
+        ...defaults,
+        createdAt: business.createdAt,
+        updatedAt: business.updatedAt,
+      } satisfies BusinessShopSettingsRecord,
+    } satisfies PublicBusinessShopBundle;
+  }
+  return {
+    business,
+    shop: mapBusinessShopSettings(snapshot.id, snapshot.data()),
+  } satisfies PublicBusinessShopBundle;
+}
+
+export async function fetchShopCheckoutContextByBusinessOwner(ownerUid: string) {
+  const context = await fetchBusinessShopCheckoutContext(ownerUid);
+  return {
+    coupons: context.coupons.filter((row) => isCouponEligibleNow(row)),
+    shippingZones: context.shippingZones.filter((row) => row.active),
+    taxRules: context.taxRules.filter((row) => row.active),
+  } satisfies ShopCheckoutContextRecord;
+}
+
+export async function fetchShopCouponsByOwner(ownerUid: string) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(collection(database, "businessShopCoupons"), where("ownerUid", "==", ownerUid), limit(200)),
+  );
+  return sortByUpdatedDesc(
+    snapshots.docs.map((snapshot) => mapShopCoupon(snapshot.id, snapshot.data())),
+  );
+}
+
+export async function upsertShopCoupon(payload: {
+  ownerUid: string;
+  couponId?: string;
+  coupon: Partial<ShopCouponInput> & Pick<ShopCouponInput, "code" | "label">;
+}) {
+  const database = getDb();
+  const shop = await fetchOrCreateBusinessShopSettings(payload.ownerUid);
+  const code = normalizeCouponCode(payload.coupon.code);
+  if (!code) {
+    throw new Error("Coupon code is required.");
+  }
+  const discountType = payload.coupon.discountType === "fixed" ? "fixed" : "percent";
+  const discountValue = Math.max(0, Number(payload.coupon.discountValue ?? 0));
+  if (discountType === "percent" && discountValue > 100) {
+    throw new Error("Percentage coupon cannot exceed 100.");
+  }
+  const docPayload = {
+    ownerUid: payload.ownerUid,
+    businessId: shop.businessId,
+    businessSlug: shop.businessSlug,
+    code,
+    label: payload.coupon.label.trim() || code,
+    description: payload.coupon.description?.trim() || null,
+    discountType,
+    discountValue,
+    minOrderAmountInr: Math.max(0, Math.round(Number(payload.coupon.minOrderAmountInr ?? 0))),
+    maxDiscountAmountInr: payload.coupon.maxDiscountAmountInr
+      ? Math.max(0, Math.round(Number(payload.coupon.maxDiscountAmountInr)))
+      : null,
+    usageLimitTotal: payload.coupon.usageLimitTotal
+      ? Math.max(1, Math.round(Number(payload.coupon.usageLimitTotal)))
+      : null,
+    appliesToPlanKeys: Array.isArray(payload.coupon.appliesToPlanKeys)
+      ? payload.coupon.appliesToPlanKeys
+          .map((entry) => String(entry).trim().toLowerCase())
+          .filter(Boolean)
+      : [],
+    startsAt: payload.coupon.startsAt?.trim() || null,
+    endsAt: payload.coupon.endsAt?.trim() || null,
+    active: payload.coupon.active ?? true,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (payload.couponId?.trim()) {
+    const ref = doc(database, "businessShopCoupons", payload.couponId.trim());
+    const existing = await getDoc(ref);
+    if (!existing.exists()) {
+      throw new Error("Coupon not found.");
+    }
+    const row = mapShopCoupon(existing.id, existing.data());
+    if (row.ownerUid !== payload.ownerUid) {
+      throw new Error("You cannot edit this coupon.");
+    }
+    await setDoc(ref, docPayload, { merge: true });
+    return payload.couponId.trim();
+  }
+  const created = await addDoc(collection(database, "businessShopCoupons"), {
+    ...docPayload,
+    usedCount: 0,
+    createdAt: serverTimestamp(),
+  });
+  return created.id;
+}
+
+export async function removeShopCoupon(payload: { ownerUid: string; couponId: string }) {
+  const database = getDb();
+  const ref = doc(database, "businessShopCoupons", payload.couponId);
+  const snapshot = await getDoc(ref);
+  if (!snapshot.exists()) return;
+  const row = mapShopCoupon(snapshot.id, snapshot.data());
+  if (row.ownerUid !== payload.ownerUid) {
+    throw new Error("You cannot delete this coupon.");
+  }
+  await deleteDoc(ref);
+}
+
+export async function fetchShopTaxRulesByOwner(ownerUid: string) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(collection(database, "businessShopTaxRules"), where("ownerUid", "==", ownerUid), limit(200)),
+  );
+  return sortByUpdatedDesc(
+    snapshots.docs.map((snapshot) => mapShopTaxRule(snapshot.id, snapshot.data())),
+  );
+}
+
+export async function upsertShopTaxRule(payload: {
+  ownerUid: string;
+  taxRuleId?: string;
+  taxRule: ShopTaxRuleInput;
+}) {
+  const database = getDb();
+  const shop = await fetchOrCreateBusinessShopSettings(payload.ownerUid);
+  const scope = normalizeTaxScope(payload.taxRule.scope);
+  const docPayload = {
+    ownerUid: payload.ownerUid,
+    businessId: shop.businessId,
+    label: payload.taxRule.label.trim() || "Tax rule",
+    scope,
+    countryCode:
+      scope === "country" || scope === "city"
+        ? normalizeCountryCode(payload.taxRule.countryCode) || null
+        : null,
+    city: scope === "city" ? normalizeCityName(payload.taxRule.city) || null : null,
+    ratePercent: Math.max(0, Number(payload.taxRule.ratePercent ?? 0)),
+    active: payload.taxRule.active,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (payload.taxRuleId?.trim()) {
+    const ref = doc(database, "businessShopTaxRules", payload.taxRuleId.trim());
+    const existing = await getDoc(ref);
+    if (!existing.exists()) throw new Error("Tax rule not found.");
+    const row = mapShopTaxRule(existing.id, existing.data());
+    if (row.ownerUid !== payload.ownerUid) {
+      throw new Error("You cannot edit this tax rule.");
+    }
+    await setDoc(ref, docPayload, { merge: true });
+    return payload.taxRuleId.trim();
+  }
+  const created = await addDoc(collection(database, "businessShopTaxRules"), {
+    ...docPayload,
+    createdAt: serverTimestamp(),
+  });
+  return created.id;
+}
+
+export async function removeShopTaxRule(payload: { ownerUid: string; taxRuleId: string }) {
+  const database = getDb();
+  const ref = doc(database, "businessShopTaxRules", payload.taxRuleId);
+  const snapshot = await getDoc(ref);
+  if (!snapshot.exists()) return;
+  const row = mapShopTaxRule(snapshot.id, snapshot.data());
+  if (row.ownerUid !== payload.ownerUid) {
+    throw new Error("You cannot delete this tax rule.");
+  }
+  await deleteDoc(ref);
+}
+
+export async function fetchShopShippingZonesByOwner(ownerUid: string) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "businessShopShippingZones"),
+      where("ownerUid", "==", ownerUid),
+      limit(200),
+    ),
+  );
+  return sortByUpdatedDesc(
+    snapshots.docs.map((snapshot) => mapShopShippingZone(snapshot.id, snapshot.data())),
+  );
+}
+
+export async function upsertShopShippingZone(payload: {
+  ownerUid: string;
+  shippingZoneId?: string;
+  shippingZone: ShopShippingZoneInput;
+}) {
+  const database = getDb();
+  const shop = await fetchOrCreateBusinessShopSettings(payload.ownerUid);
+  const docPayload = {
+    ownerUid: payload.ownerUid,
+    businessId: shop.businessId,
+    label: payload.shippingZone.label.trim() || "Shipping zone",
+    countries: payload.shippingZone.countries
+      .map((entry) => normalizeCountryCode(entry))
+      .filter(Boolean),
+    cities: payload.shippingZone.cities
+      .map((entry) => normalizeCityName(entry))
+      .filter(Boolean),
+    feeInr: Math.max(0, Math.round(Number(payload.shippingZone.feeInr ?? 0))),
+    freeShippingMinOrderInr: payload.shippingZone.freeShippingMinOrderInr
+      ? Math.max(0, Math.round(Number(payload.shippingZone.freeShippingMinOrderInr)))
+      : null,
+    active: payload.shippingZone.active,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (payload.shippingZoneId?.trim()) {
+    const ref = doc(database, "businessShopShippingZones", payload.shippingZoneId.trim());
+    const existing = await getDoc(ref);
+    if (!existing.exists()) throw new Error("Shipping zone not found.");
+    const row = mapShopShippingZone(existing.id, existing.data());
+    if (row.ownerUid !== payload.ownerUid) {
+      throw new Error("You cannot edit this shipping zone.");
+    }
+    await setDoc(ref, docPayload, { merge: true });
+    return payload.shippingZoneId.trim();
+  }
+  const created = await addDoc(collection(database, "businessShopShippingZones"), {
+    ...docPayload,
+    createdAt: serverTimestamp(),
+  });
+  return created.id;
+}
+
+export async function removeShopShippingZone(payload: { ownerUid: string; shippingZoneId: string }) {
+  const database = getDb();
+  const ref = doc(database, "businessShopShippingZones", payload.shippingZoneId);
+  const snapshot = await getDoc(ref);
+  if (!snapshot.exists()) return;
+  const row = mapShopShippingZone(snapshot.id, snapshot.data());
+  if (row.ownerUid !== payload.ownerUid) {
+    throw new Error("You cannot delete this shipping zone.");
+  }
+  await deleteDoc(ref);
+}
+
+async function appendInventoryLog(payload: {
+  ownerUid: string;
+  businessId?: string;
+  itemType: "product" | "service";
+  itemId: string;
+  itemTitle: string;
+  source: "manual_create" | "manual_adjustment" | "catalog_sync";
+  previousStock?: number;
+  nextStock?: number;
+  note?: string;
+}) {
+  const database = getDb();
+  const previous =
+    payload.previousStock === undefined || payload.previousStock === null
+      ? undefined
+      : Math.round(Number(payload.previousStock));
+  const next =
+    payload.nextStock === undefined || payload.nextStock === null
+      ? undefined
+      : Math.round(Number(payload.nextStock));
+  await addDoc(collection(database, "shopInventoryLogs"), {
+    ownerUid: payload.ownerUid,
+    businessId: payload.businessId ?? null,
+    itemType: payload.itemType,
+    itemId: payload.itemId,
+    itemTitle: payload.itemTitle,
+    source: payload.source,
+    previousStock: previous ?? null,
+    nextStock: next ?? null,
+    change:
+      previous === undefined || next === undefined ? null : Number(next) - Number(previous),
+    note: payload.note?.trim() || null,
+    createdAt: serverTimestamp(),
+  });
+}
+
+export async function fetchShopInventoryLogsByOwner(ownerUid: string, limitRows = 120) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "shopInventoryLogs"),
+      where("ownerUid", "==", ownerUid),
+      limit(Math.max(1, Math.min(300, Math.round(limitRows)))),
+    ),
+  );
+  return sortByCreatedDesc(
+    snapshots.docs.map((snapshot) => mapShopInventoryLog(snapshot.id, snapshot.data())),
+  );
+}
+
+export async function updateShopInventoryStock(payload: {
+  ownerUid: string;
+  itemType: "product" | "service";
+  itemId: string;
+  nextStock: number;
+  note?: string;
+}) {
+  const database = getDb();
+  const collectionName = payload.itemType === "service" ? "businessServices" : "digitalProducts";
+  const ref = doc(database, collectionName, payload.itemId);
+  const snapshot = await getDoc(ref);
+  if (!snapshot.exists()) throw new Error("Item not found.");
+  const data = snapshot.data() as Record<string, unknown>;
+  const ownerUid = String(data.ownerUid ?? "");
+  if (ownerUid !== payload.ownerUid) {
+    throw new Error("You cannot update this stock.");
+  }
+  const currentStock =
+    data.stockAvailable === undefined || data.stockAvailable === null
+      ? undefined
+      : Number(data.stockAvailable);
+  const normalizedNextStock = Math.max(0, Math.round(Number(payload.nextStock) || 0));
+  await updateDoc(ref, {
+    stockAvailable: normalizedNextStock,
+    updatedAt: serverTimestamp(),
+  });
+  await appendInventoryLog({
+    ownerUid: payload.ownerUid,
+    businessId: data.businessId ? String(data.businessId) : undefined,
+    itemType: payload.itemType,
+    itemId: payload.itemId,
+    itemTitle: String(data.title ?? "Item"),
+    source: "manual_adjustment",
+    previousStock: currentStock,
+    nextStock: normalizedNextStock,
+    note: payload.note,
+  });
+}
+
+export async function fetchAbandonedCheckoutsByBusinessOwner(ownerUid: string, limitRows = 120) {
+  const database = getDb();
+  const snapshots = await getDocs(
+    query(
+      collection(database, "abandonedCheckouts"),
+      where("businessOwnerUid", "==", ownerUid),
+      limit(Math.max(1, Math.min(300, Math.round(limitRows)))),
+    ),
+  );
+  return sortByCreatedDesc(
+    snapshots.docs.map((snapshot) => mapAbandonedCheckout(snapshot.id, snapshot.data())),
+  );
 }
 

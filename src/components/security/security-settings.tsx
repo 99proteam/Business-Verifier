@@ -15,12 +15,23 @@ import {
 } from "@/lib/firebase/repositories";
 
 export function SecuritySettings() {
-  const { user, hasFirebaseConfig, refreshSecurityState } = useAuth();
+  const {
+    user,
+    hasFirebaseConfig,
+    needsPasswordSetup,
+    setAccountPassword,
+    refreshSecurityState,
+  } = useAuth();
   const [identity, setIdentity] = useState<UserIdentityProfileRecord | null>(null);
   const [authenticator, setAuthenticator] = useState<AuthenticatorSettingsRecord | null>(null);
   const [draft, setDraft] = useState<AuthenticatorEnrollmentDraft | null>(null);
   const [verifyCode, setVerifyCode] = useState("");
   const [actionCode, setActionCode] = useState("");
+  const [passwordValue, setPasswordValue] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordInfo, setPasswordInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -187,6 +198,100 @@ export function SecuritySettings() {
           {error}
         </div>
       )}
+
+      <section className="glass rounded-3xl p-6">
+        <h2 className="text-lg font-semibold tracking-tight">Login methods</h2>
+        <p className="mt-1 text-sm text-muted">
+          Add password login for this account. Gmail login will continue to work.
+        </p>
+        <p className="mt-2 text-xs text-muted">
+          Current providers:{" "}
+          {user?.providerData.length
+            ? user.providerData.map((provider) => provider.providerId).join(", ")
+            : "Not available"}
+        </p>
+        {needsPasswordSetup && (
+          <p className="mt-2 rounded-xl border border-brand/35 bg-brand/10 px-3 py-2 text-xs">
+            Password setup is pending for this account.
+          </p>
+        )}
+        {passwordInfo && (
+          <p className="mt-2 rounded-xl border border-brand/35 bg-brand/10 px-3 py-2 text-xs">
+            {passwordInfo}
+          </p>
+        )}
+        {passwordError && (
+          <p className="mt-2 rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+            {passwordError}
+          </p>
+        )}
+        <form
+          className="mt-4 grid gap-3 md:max-w-xl md:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setPasswordError(null);
+            setPasswordInfo(null);
+            const nextPassword = passwordValue.trim();
+            if (nextPassword.length < 8) {
+              setPasswordError("Password must be at least 8 characters.");
+              return;
+            }
+            if (nextPassword !== passwordConfirm.trim()) {
+              setPasswordError("Passwords do not match.");
+              return;
+            }
+            setPasswordBusy(true);
+            void setAccountPassword(nextPassword)
+              .then(() => {
+                setPasswordValue("");
+                setPasswordConfirm("");
+                setPasswordInfo("Password saved. Email + password login is ready.");
+              })
+              .catch((submitError: unknown) => {
+                const message =
+                  submitError instanceof Error
+                    ? submitError.message
+                    : "Unable to set password right now.";
+                if (message.toLowerCase().includes("requires-recent-login")) {
+                  setPasswordError("Sign in again, then retry password setup.");
+                  return;
+                }
+                setPasswordError(message);
+              })
+              .finally(() => {
+                setPasswordBusy(false);
+              });
+          }}
+        >
+          <label className="space-y-1">
+            <span className="text-sm">New password</span>
+            <input
+              type="password"
+              value={passwordValue}
+              onChange={(event) => setPasswordValue(event.target.value)}
+              className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+              placeholder="Minimum 8 characters"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm">Confirm password</span>
+            <input
+              type="password"
+              value={passwordConfirm}
+              onChange={(event) => setPasswordConfirm(event.target.value)}
+              className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none"
+              placeholder="Re-enter password"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={passwordBusy}
+            className="rounded-xl bg-brand px-3 py-2 text-sm font-medium text-white transition hover:bg-brand-strong disabled:opacity-70 md:col-span-2 md:w-fit"
+          >
+            {passwordBusy ? "Saving password..." : "Save password"}
+          </button>
+        </form>
+      </section>
 
       <section className="glass rounded-3xl p-6">
         <h2 className="text-lg font-semibold tracking-tight">Authenticator MFA</h2>

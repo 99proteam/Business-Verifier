@@ -74,6 +74,16 @@ export async function POST(request: NextRequest) {
       const pricingPlanKey = body.pricingPlanKey
         ? String(body.pricingPlanKey).trim()
         : undefined;
+      const couponCode = body.couponCode ? String(body.couponCode).trim() : undefined;
+      const shippingZoneId = body.shippingZoneId
+        ? String(body.shippingZoneId).trim()
+        : undefined;
+      const checkoutCountry = body.checkoutCountry
+        ? String(body.checkoutCountry).trim()
+        : undefined;
+      const checkoutCity = body.checkoutCity
+        ? String(body.checkoutCity).trim()
+        : undefined;
       if (!productSlug) {
         return NextResponse.json(
           { ok: false, error: "Product checkout requires productSlug." },
@@ -88,6 +98,10 @@ export async function POST(request: NextRequest) {
         pricingPlanKey,
         provider,
         currency,
+        couponCode,
+        shippingZoneId,
+        checkoutCountry,
+        checkoutCity,
       });
     }
 
